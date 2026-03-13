@@ -1,0 +1,32 @@
+# 大型数据目录（不纳入版本控制）
+logs/
+datas/
+
+# Python 虚拟环境
+.venv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
+results/**/*.html
+
+# 临时文件
+tmp/
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter 临时文件
+.ipynb_checkpoints/
+
+# 编辑器
+.idea/
+*.iml

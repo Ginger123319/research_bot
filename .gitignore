@@ -2,6 +2,9 @@
 logs/
 datas/
 
+# Node.js
+node_modules/
+
 # Python 虚拟环境
 .venv
 .venv/
@@ -14,8 +17,11 @@ dist/
 build/
 .eggs/
 
+# 分析结果目录（按需手动 git add 选择性提交）
+results/
+
 # 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
-results/**/*.html
+# results/**/*.html
 
 # 临时文件
 tmp/

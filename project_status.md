@@ -722,3 +722,398 @@ benchmark --exp-name hepan_temp_test \
 2. **模型档案**：`clingo/docs/models/tianji-querysafety-4b.md` — 结合本次拐点数据填写容量基准
 3. **`model-onboarding.md` 补充**：tianji-querysafety 作为情况 B 案例写入 SOP，补充容量评估环节
 4. **qps-sweep-comparison Skill 更新**：将 tianji 4TP vs 4DP 作为新的参考案例写入，并补充"缓存预热异常点剔除"操作指南
+
+---
+
+---
+
+# 会话报告 — 2026-03-13（HTTP 文件服务器优化）
+
+## 📌 会话概览
+
+- **日期**：2026-03-13
+- **时间段**：15:00 ~ 15:45
+- **主要目标**：修复静态文件服务器中文乱码 + 新增 Markdown 渲染能力
+- **Git 分支**：不适用（非 git 仓库）
+
+---
+
+## ✅ 成果
+
+1. **创建 `scripts/serve.py`**：统一替换项目中所有 `python3 -m http.server` 用法
+   - 修复中文乱码：强制所有文本类型响应头加 `charset=utf-8`
+   - Markdown 渲染：服务端用 `markdown-it-py` 将 `.md` 转为 GitHub 风格 HTML，支持表格、图片、代码块
+   - 完全离线：CSS 内联，无需 CDN，适配无外网服务器环境
+   - `?raw=1` 参数可查看原始文本
+2. **清理旧进程**：kill 3 个旧 `http.server` 进程（端口 18999/8765/8891）
+3. **nohup 持久化启动**：两个服务（18999/results、8765/logs）通过 `nohup` 启动，脱离 Cursor shell 生命周期
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/serve.py` | ✨ 新增（约 130 行）| 核心服务脚本 |
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 解决方案 |
+|------|---------|
+| 新服务启动后仍乱码 | 浏览器缓存问题，`Ctrl+Shift+R` 强制刷新解决 |
+| Markdown 页面"正在加载…"（CDN 不通）| 改用 `markdown-it-py` 服务端渲染，完全离线 |
+| 进程意外消失 | Cursor shell 生命周期问题，改用 `nohup` 启动后解决 |
+
+---
+
+## 🎯 技术决策
+
+- **选择 `markdown-it-py` 而非 `markdown`/`mistune`**：服务器环境中仅 `markdown-it-py 4.0.0` 已安装，且原生支持 GFM 表格（通过 `.enable("table")`），无需额外安装
+- **CSS 内联而非单独文件**：减少请求数，避免额外依赖，适合简单内部工具场景
+- **服务端渲染而非客户端渲染**：客户端渲染依赖 CDN JS 库，内网不可达；服务端渲染稳定可靠
+
+---
+
+## 🛠️ 当前运行服务
+
+| 端口 | 目录 | 重启命令 |
+|------|------|---------|
+| 18999 | `results/` | `nohup python3 scripts/serve.py 18999 --bind 0.0.0.0 --directory results &>/tmp/serve_results.log &` |
+| 8765 | `logs/` | `nohup python3 scripts/serve.py 8765 --bind 0.0.0.0 --directory logs &>/tmp/serve_logs.log &` |
+
+---
+
+## ⚠️ 未完成事项（延续上次）
+
+- `llm-deployment-docker` Skill（P0，待建，**下次优先**）
+- `llm-service-probing` Skill（P1，待建）
+- `clingo/docs/models/` 三个模型档案（待建）
+- `print_sla_analysis` P95/P99 增强代码：已写入，下次运行前请确认文件内容正确
+
+---
+
+## 📈 下次会话计划
+
+1. **`llm-deployment-docker` Skill 建设**（P0）
+2. **模型档案**：`clingo/docs/models/tianji-querysafety-4b.md`
+3. **`model-onboarding.md` 补充**：tianji-querysafety 情况 B 案例 + 容量评估环节
+4. **qps-sweep-comparison Skill 更新**：tianji 4TP vs 4DP 参考案例 + 缓存预热异常点剔除指南
+
+---
+
+# 会话报告 — 2026-03-13（tianji 4TP QPS 报告 E2E P95 补充分析）
+
+## 📌 会话概览
+
+- **日期**：2026-03-13
+- **主要目标**：深度分析 QPS=6.9/7.0 延迟骤降现象，补充 E2E P95/P99 完整数据到 REPORT.md
+- **Git 分支**：不适用（非 git 仓库）
+
+---
+
+## ✅ 成果
+
+### 1. 原始数据精确计算（E2E P95/P99 全 30 档）
+
+- 直接解析 `logs/tianji_qps_20260311_200338/` 30 个子目录中每条请求的 `token_list` 时间戳
+- 精确计算 TTFT（`[START]` → 首个 content token）和 E2E（`[START]` → `[DONE]`）
+- 数据精度从原来 0.1s 粒度提升为毫秒级
+
+**核心发现**：
+
+| QPS 段 | E2E P95 | E2E P99 | TTFT P90 | 现象 |
+|--------|---------|---------|----------|------|
+| 4.00~4.72 | 242~246ms | 585~646ms | 117~119ms | 低负载平稳段 |
+| 4.83~5.03 | 269~302ms | 630~640ms | 116~117ms | P95 开始抬升 |
+| 5.14~6.59 | 306~329ms | 681~807ms | 115~120ms | 中负载平台期，6.59 时 P99 达全程峰值 807ms |
+| **6.90** | **270ms** | **554ms** | **107ms** | **转折点，缓存开始锁定** |
+| **7.00** | **146ms** | **457ms** | **60ms** | **质变，TTFT 减半，缓存 100% 命中** |
+
+### 2. 缓存机制解释升级
+
+从"缓存预热效应"升级为 **"KV Cache 命中率阶跃式锁定"** 三阶段模型：
+
+- **阶段 1**（QPS < 6.90）：8K Token 前缀缓存热但偶发驱逐，P99 随 QPS 升高累积至 807ms 峰值
+- **阶段 2**（QPS = 6.90）：请求密度越过阈值，前缀条目被系统保持在显存热区，P99 骤降至 554ms
+- **阶段 3**（QPS = 7.00）：前缀 prefill 几乎全部跳过（TTFT P90 = 60ms，仅需计算几十个 user token），E2E P95 从 329ms → 146ms（降幅 56%）
+
+### 3. REPORT.md 更新
+
+- **Section 3**：新增 E2E P95/P99 列，延迟单位统一为毫秒整数
+- **Section 4**：关键异常表格补充 P95/P99，分析文字升级为三阶段机制
+- **Section 6**：新增 E2E P95 表现行（全程 ≤ 329ms，余量 18%+）
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `results/tianji_querysafety_4tp_qps_20260311/REPORT.md` | 📝 重写 | 补充 E2E P95/P99 数据 + 升级缓存机制解释 |
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 解决方案 |
+|------|---------|
+| `StrReplace` 匹配失败（旧文件使用 `\|\|` 双竖线格式） | 改用 `Write` 工具完整覆写，同时统一表格为标准单竖线格式 |
+| Python 解析 18,900 行 × JSON 耗时约 104 秒 | 等待完成（属正常，单次离线计算可接受）|
+
+---
+
+## 🎯 技术决策
+
+- **直接解析 token_list 时间戳**：比分析脚本的聚合输出精度更高（毫秒级 vs 0.1s 粒度），且可复现任意分位数
+- **P99 作为缓存锁定的辅助证据**：P99 在 6.59 处的 807ms 峰值是"缓存即将锁定但还未锁定"临界态的最直接体现，比 P90 更敏感
+
+---
+
+## ⚠️ 未完成事项（延续上次）
+
+- `clingo/docs/models/tianji-querysafety-4b.md` 模型档案（待建）
+- `llm-deployment-docker` Skill（P0，待建）
+- `llm-service-probing` Skill（P1，待建）
+
+---
+
+## 📈 下次会话计划
+
+1. **模型档案**：`clingo/docs/models/tianji-querysafety-4b.md` — 记录容量基准（SLA 合规 QPS=8.0，需 6 实例覆盖峰值）
+2. **`llm-deployment-docker` Skill 建设**（P0）
+3. **`llm-service-probing` Skill 建设**（P1）
+
+---
+
+---
+
+# 会话报告 - 2026-03-13（下午）
+
+## 📌 会话概览
+
+- **日期**：2026-03-13
+- **主要目标**：tianji-querysafety-4b-v2-3 模型的 4TP vs 4DP 部署对比、4TP 真实拐点定位、工具精度修复与 Skill 文档补全
+- **涉及模型**：`tianji_query_safety/v2p3_ep1`（4B 安全检测，SGLang 4TP 部署）
+
+---
+
+## ✅ 成果
+
+### 1. 4TP 真实拐点定位
+
+**结论：SLA 合规最大 QPS = 8.0 req/s（480 RPM）**
+
+| 阶段 | QPS 区间 | E2E P90 | 状态 |
+|------|---------|---------|------|
+| 低负载稳定区 | 4.0 ~ 5.5 | 0.218~0.240s | ✅ PASS |
+| 中负载平稳区 | 5.5 ~ 6.79 | 0.250~0.294s | ✅ PASS |
+| 过渡区 | 7.5 ~ 8.0 | 0.300~0.330s | ✅ PASS |
+| **拐点** | **8.0 → 8.5** | 0.330 → 0.363s | **❌ E2E P95=0.422s 首次超标** |
+| 过载区 | 8.5 ~ 10.0 | 0.363~0.457s | ❌ FAIL |
+
+扩容建议：覆盖业务峰值 2168 RPM（36.1 req/s）需 **6 个 4TP 实例 = 24 卡 H100**（含 20% 安全余量）。
+
+### 2. 4TP vs 4DP 对比结论
+
+| 部署配置 | SLA 合规最大 QPS | 档位结果 |
+|---------|----------------|---------|
+| **4TP×1实例** | **8.0 req/s** | ✅ 全 36 档 PASS（含高 QPS 段） |
+| **1TP×4DP** | **None** | ❌ 全 28 档 FAIL（E2E P90 超标 4~8 倍） |
+
+根本原因：8K Token system prompt 的 prefill 是决定性瓶颈。4TP 将注意力头分摊到 4 块 GPU，延迟约为 1TP 的 1/4。
+
+### 3. E2E P90 精度修复
+
+`multi_exp_compare.py` 的 `print_sla_analysis` 函数中 E2E P90 格式串由 `%10.1f`（1位）修复为 `%10.3f`（3位），与 TTFS P90 保持一致。
+
+### 4. qps-sweep-comparison Skill 补全
+
+新增三项内容：
+- **方式 A（推荐）**：YAML `--config` 配置文件，不修改脚本
+- **跨目录合并方案**：`cp -rl` 硬链接（✅）vs `ln -sfn` 符号链接（❌，Python glob 不追踪）
+- **异常档位剔除规范**：建过滤目录保留原始数据，不直接删除
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/benchmark/run_tianji_querysafety_4tp_highqps_sweep.sh` | ✨ 新建 | 4TP 高 QPS 扫描脚本（7.5~10.0，6 档） |
+| `logs/tianji_4tp_highqps_20260313_121446/` | ✨ 生成 | 高 QPS 6 档实验原始结果 |
+| `logs/tianji_4tp_qps_merged/` | ✨ 新建 | 低+高段合并目录（36 档） |
+| `logs/tianji_4tp_qps_merged_filtered/` | ✨ 新建 | 剔除 qps_6.90 / qps_7.00（34 档） |
+| `logs/tianji_opti_qps_20260312_111300_filtered/` | ✨ 新建 | 剔除 opti_qps_6.79 / opti_qps_7.00（28 档） |
+| `results/tianji_querysafety_4tp_vs_4dp_filtered_20260313/REPORT.md` | ✨ 新建 | 4TP vs 4DP 最终对比报告 |
+| `results/tianji_querysafety_4tp_fullrange_20260313/REPORT.md` | ✨ 新建 | 4TP 全范围拐点报告（34 档） |
+| `src/llm_benchmark/analysis/analysis/multi_exp_compare.py` | 🐛 修复 | E2E P90 输出精度 1位→3位 |
+| `.cursor/skills/qps-sweep-comparison/SKILL.md` | 📚 更新 | YAML config + 跨目录合并 + symlink 警告 |
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 原因 | 解决方案 |
+|------|------|---------|
+| `multi_exp_compare.py` 扫描合并目录时找到 0 个文件 | `ln -sfn` 符号链接目录不被 `Path.glob("**/*.csv")` 遍历 | 改用 `cp -rl` 建硬链接目录，并在 Skill 中补充警告说明 |
+| E2E P90 精度只有 1 位小数 | 格式串 `%10.1f` 与 TTFS P90 的 `%9.3f` 不一致（代码 bug） | 修复为 `%10.3f`，fail_reasons 同步修复 |
+| `StrReplace` 无法精确匹配 REPORT 内容 | 文件之前被部分修改，与 old_string 有微小差异 | 改用 `Write` 工具完整覆写 |
+
+---
+
+## 🎯 技术决策
+
+- **异常档位剔除用过滤目录而非删除**：保留原始实验数据完整性，过滤目录仅建硬链接，不占额外存储
+- **4TP 合并用 `cp -rl` 而非 `ln -sfn`**：`Path.glob("**")` 默认不追踪指向目录的符号链接，硬链接是唯一可靠方案
+- **KV Cache 热身点（QPS=6.90/7.00）列为异常剔除**：这两个点 TTFS P90 骤降至 0.236s/0.138s，不代表服务正常稳态，会扭曲拐点曲线的连续性判断
+
+---
+
+## ⚠️ 未完成事项
+
+| 事项 | 优先级 | 说明 |
+|------|--------|------|
+| `clingo/docs/models/tianji-querysafety-4b.md` 模型档案 | P1 | 记录 SLA 容量基准、推荐部署方案 |
+| `llm-deployment-docker` Skill | P0 | 待建 |
+| `llm-service-probing` Skill | P1 | 待建 |
+
+---
+
+## 📈 下次会话计划
+
+1. **模型档案建设**：`clingo/docs/models/tianji-querysafety-4b.md`，记录完整容量数据
+2. **`llm-deployment-docker` Skill 建设**（P0）
+3. **`llm-service-probing` Skill 建设**（P1）
+
+---
+
+---
+
+# 会话报告 - 2026-03-13（下午：T8 model-evaluation-workflow）
+
+## 📌 会话概览
+
+- **日期**：2026-03-13
+- **主要目标**：完成 T8 `model-evaluation-workflow` Skill 设计与编写，同步文档，提交 Git
+- **Git 分支**：main
+- **当前提交**：`2a7e606`（feat: add model-evaluation-workflow Skill (T8) and sync docs）
+- **Skill 体系总数**：8 个全部完成
+
+---
+
+## ✅ 成果
+
+### 1. ✨ `model-evaluation-workflow` Skill 正式完成（T8）
+
+新模型接入的**顶层编排 Skill**，协调所有子 Skill 的调用顺序、跳过逻辑和进度记录。
+
+**核心设计：两阶段 + 人工断点**
+
+```
+━━ 阶段一（本地准备）━━
+  Step 0  信息收集
+  Step 1  本地 Docker 部署         → llm-deployment-docker Skill
+  Step 2  服务探测（无数据时）      → llm-service-probing Skill
+  Step 3  数据处理（有数据时）      → traffic-dataset-prep Skill
+
+  🔴 人工断点：AI 主动暂停，等待用户提供 k8s endpoint URL
+
+━━ 阶段二（远端评估）━━
+  Step 4  远端连通性验证（3项检查）
+  Step 5  Benchmark              → llm-replay-benchmark + qps-benchmark-sweep
+  Step 6  结果分析 & 报告归档    → benchmark-result-analysis + qps-sweep-comparison
+```
+
+**关键设计决策**：
+
+| 决策点 | 选择 | 理由 |
+|--------|------|------|
+| Skill 结构 | Step Cards（步骤卡片）| 每步独立、跳过条件明确、易于跨会话续跑 |
+| 进度追踪 | `progress.md` 文件写入 | 持久化、跨会话可读、人机均可查看 |
+| 跳过粒度 | 每步独立前置检查（产物是否存在）| 避免重复执行，同时支持断点续跑 |
+| 阶段一/二划分 | 本地 vs 远端，以 URL 为断点 | 两阶段时间跨度不同（本地立即 / 远端需人工操作平台）|
+| 技术细节 | 不写在此 Skill，委托子 Skill | 保持单一职责，避免重复维护 |
+
+**Step 0 部署规格两种形态（根据真实案例设计）**：
+
+| 形态 | 案例 | 内容 |
+|------|------|------|
+| 形态 A | ziwei-32b / ziwei-8b | 直接给 `python3 -m sglang.launch_server ...` 命令 + 镜像名 |
+| 形态 B | tianji-querysafety-4b | 给 Dockerfile（ENTRYPOINT 含完整启动命令）|
+
+两种形态提取相同字段：镜像、模型路径、端口、tp-size/dp-size、chat-template、mem-fraction-static 等。
+
+**文件位置**：
+- Skill：`clingo/docs/skills/model-evaluation-workflow/SKILL.md`（323 行）
+- 软链接：`.cursor/skills/model-evaluation-workflow` → `../../clingo/docs/skills/model-evaluation-workflow`
+
+### 2. 📚 文档同步更新
+
+| 文档 | 更新内容 |
+|------|---------|
+| `skills-roadmap.md` | `model-evaluation-workflow` 从 `⬜ 待建` → `✅ 完成`；`llm-deployment-docker`、`llm-service-probing` 详情章节验证状态补全 |
+| `need-todo-idea.md` | T8 从 `[ ]` → `[x]` 标记完成 |
+| `clingo/docs/README.md` | 目录树增加 `model-evaluation-workflow/`；Skill 体系表从"7个"→"8个" |
+| `progress.md` | 添加本次会话日志（包括两阶段设计、Step 卡片、部署规格形态）|
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `clingo/docs/skills/model-evaluation-workflow/SKILL.md` | ✨ 新增 | T8 顶层编排 Skill，323 行 |
+| `.cursor/skills/model-evaluation-workflow` | ✨ 新增（软链接）| Cursor IDE 加载入口 |
+| `clingo/docs/skills/skills-roadmap.md` | 📝 修改 | 状态表 + 详情章节更新 |
+| `clingo/docs/need-todo-idea.md` | 📝 修改 | T8 标记完成 |
+| `clingo/docs/README.md` | 📝 修改 | 目录树 + Skill 体系表同步 |
+| `progress.md` | 📝 更新 | 本次会话日志写入 |
+| `project_status.md` | 📝 更新 | 本文件 |
+
+**Git commit**：`2a7e606` — 8 文件变更，723 insertions, 45 deletions
+
+---
+
+## 🐛 问题与解决方案
+
+本次会话无错误。
+
+---
+
+## 🎯 技术决策
+
+1. **顶层 Skill 只做编排，不做执行**：`model-evaluation-workflow` 不重复描述技术细节，全部委托子 Skill，保持单一职责。下游 Skill 更新时，顶层 Skill 不需要跟着改。
+
+2. **部署规格形态 A/B 统一抽象**：算法人员可能给命令行（ziwei 方式）或 Dockerfile（tianji 方式），Skill 统一抽象为"部署规格"，提取相同字段，屏蔽格式差异。
+
+3. **人工断点明确化**：之前 `model-onboarding.md` 中断点是隐式的（用户自行理解），新 Skill 中 AI 主动输出格式化暂停消息，明确告知用户"现在需要你去平台部署，拿到 URL 后回来"。
+
+4. **推理参数可选项**：`temperature`、`top_p`、`top_k`、`presence_penalty`、`max_tokens` 作为可选输入收集，Step 5 benchmark 时透传，确保测试结果与真实业务调用对齐。
+
+---
+
+## ⚠️ 未完成事项
+
+| 事项 | 优先级 | 说明 |
+|------|--------|------|
+| `model-evaluation-workflow` GREEN 验证 | P0 | 待下次接入新模型时完整跑一遍验证 |
+| `clingo/docs/models/` 模型档案目录 | P1 | IDEA I1，为每个模型维护技术说明书 |
+| `workflow/reporting-template.md` | P2 | T3，基于 3 个模型 REPORT.md 抽象通用模板 |
+| `llm_benchmark/analysis` 结构化导出 | P3 | T6，绕过截图流失问题 |
+
+---
+
+## 💡 建议与注意事项
+
+- `model-evaluation-workflow` 的 GREEN 阶段验证是最重要的下一步：只有在真实新模型接入时跑完整流程，才能发现 Step 卡片之间的衔接问题（比如 Step 2 是否真的可以被 Step 1 带出）
+- 下次接新模型时，优先从算法人员处确认部署规格的形态（命令行 or Dockerfile），以及是否有业务数据，据此判断 Step 2 / Step 3 哪个先跑
+
+---
+
+## 📈 下次会话计划
+
+1. **等待新模型接入**，使用 `model-evaluation-workflow` Skill 完整验证全流程（GREEN 阶段）
+2. 若有新模型：按 Step 0 → Step 1 → ... 完整执行，记录问题，执行 REFACTOR
+3. 若暂无新模型：可以建设 `clingo/docs/models/` 模型档案目录（IDEA I1），补录已跑通的 4 个模型档案

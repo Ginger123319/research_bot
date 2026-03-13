@@ -1,6 +1,6 @@
 # Need · TODO · IDEA
 
-> 规划讨论文档 — 写于 2026-03-11，更新于 2026-03-12
+> 规划讨论文档 — 写于 2026-03-11，更新于 2026-03-13
 
 ---
 
@@ -20,7 +20,7 @@
 
 业务数据统一存放在 `/mnt/ai-infra/datasets`（正在逐步建设中）。
 
-→ 暂不做 Skill，目前没有复用需求。
+→ ✅ 已建设为 `llm-service-probing` Skill（2026-03-13），自动侦察判型，无需提前知道模型用途。
 
 ---
 
@@ -60,20 +60,20 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 - [x] **T1** 创建 `traffic-dataset-prep` Skill ✅ 已验证（ziwei-32b / hepan-72b）
   - 同步把 `tmp/` 下 data 类脚本整理到 `scripts/data/`
 
-- [ ] **T2** 创建 `clingo/docs/workflow/model-onboarding.md`
-  - 将 ziwei 全流程提炼为标准 SOP
+- [x] **T2** 创建 `clingo/docs/workflow/model-onboarding.md` ✅ 已完成（ziwei 全流程 6步 SOP）
 
 - [ ] **T3** 创建 `clingo/docs/workflow/reporting-template.md`
-  - 基于 `results/ziwei_benchmark_20260310_163524/REPORT.md` 抽象模板
+  - 基于多模型 REPORT.md 抽象通用模板（ziwei/hepan/tianji 均已有完整报告可参考）
 
 ### 后续按流程推进
 
-- [ ] **T4** `llm-deployment-docker` Skill（部署参数速查）— **当前优先**
+- [x] **T4** `llm-deployment-docker` Skill ✅ 已验证（预检+DP/TP推荐+健康检查，tianji-4b 实测，2026-03-13）
+- [x] **T4.5** `llm-service-probing` Skill ✅ 已验证（3探针自动判型，安全拦截/分类/对话，REFACTOR 完毕，2026-03-13）
 - [x] **T5** `qps-benchmark-sweep` Skill ✅ 已验证（ziwei / tianji 实测）
 - [ ] **T6** 梳理 `llm_benchmark/analysis` 中间输出，规划结构化导出方案
 - [x] **T7** `benchmark-result-analysis` Skill ✅ 已完成（offline_analysis.py + PNG + REPORT 骨架，ziwei / hepan / tianji 多模型验证）
 - [x] **T7.5** `llm-replay-benchmark` Skill ✅ 已验证（ziwei-32b poisson_100 + tianji-querysafety-4b peak30min，2026-03-12）
-- [ ] **T8** `model-evaluation-workflow` Skill（顶层流程编排，依赖前面 Skill 稳定后）
+- [x] **T8** `model-evaluation-workflow` Skill ✅ 已完成（顶层 Pattern，两阶段+人工断点，7步卡片+跳过条件，2026-03-13）
 
 ---
 

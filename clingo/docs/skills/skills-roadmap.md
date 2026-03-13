@@ -36,7 +36,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 | `llm-deployment-docker` | P0 | ✅ 已验证 | `clingo/docs/skills/llm-deployment-docker/` |
 | `llm-service-probing` | P1 | ✅ 已验证 | `clingo/docs/skills/llm-service-probing/` |
 | `benchmark-result-analysis` | P2 | ✅ 完成 | offline_analysis.py（HTML + PNG + REPORT 骨架）|
-| `model-evaluation-workflow` | P2 | ⬜ 待建 | 依赖前面 Skill 稳定后 |
+| `model-evaluation-workflow` | P2 | ✅ 完成 | `clingo/docs/skills/model-evaluation-workflow/` |
 
 ---
 
@@ -65,7 +65,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ---
 
-### 🔄 `llm-deployment-docker`（P0，初稿完成，待实测验证）
+### ✅ `llm-deployment-docker`（P0，已验证）
 
 **类型**：Technique + Reference  
 **触发条件**：需要用 Docker 部署 sglang 推理服务（本机可跑时自动执行，显存不足时输出参考命令）  
@@ -80,7 +80,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 | 常见报错 | 权限 / 端口冲突 / OOM / registry 认证 / 健康检查超时 |
 
 **参考脚本**：`scripts/deploy/start_*.sh`  
-**验证状态**：⬜ 待用 tianji-querysafety-4b-v2-3 实测
+**验证状态**：✅ 已用 tianji-querysafety-4b-v2-3 实测（DP=4 PCIe，2026-03-13）
 
 ---
 
@@ -138,7 +138,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ---
 
-### 🔄 `llm-service-probing`（P1，初稿完成，待实测验证）
+### ✅ `llm-service-probing`（P1，已验证）
 
 **类型**：Technique  
 **触发条件**：对已部署服务进行能力探测，无业务数据时自动判断模型类型和使用场景  
@@ -152,7 +152,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 | 报告 | 模型类型 + 使用场景描述 + 注意事项 |
 
 **与 llm-deployment-docker 的关系**：deployment Skill 在 smoke test 通过后自动调用本 Skill  
-**验证状态**：⬜ 待用三个模型实测（安全拦截 / 分类 / 对话各一个）
+**验证状态**：✅ 已用 tianji-querysafety-4b-v2-3 实测（安全拦截判型验证，REFACTOR 完毕，2026-03-13）
 
 ---
 
@@ -169,16 +169,29 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ---
 
-### ⬜ `model-evaluation-workflow`（P2，待建）
+### ✅ `model-evaluation-workflow`（P2，完成）
 
 **类型**：Pattern（流程编排）  
 **触发条件**：接入全新模型，需要从头到尾完成完整评估  
-**依赖**：上述 P0/P1 Skill 全部完成并验证后再建  
-**计划内容**：
+**覆盖内容**：
 
-- 8步检查清单（带入口/出口条件）
-- progress.md 更新规范
-- 可跳过步骤的条件判断
+| 步骤 | 内容 |
+|------|------|
+| Step 0 | 信息收集（部署规格形态A/B + GPU 状态 + 业务数据 + 推理参数）|
+| Step 1 | 本地 Docker 部署 → 委托 llm-deployment-docker Skill |
+| Step 2 | 服务探测 → 委托 llm-service-probing Skill（无数据时）|
+| Step 3 | 数据处理 → 委托 traffic-dataset-prep Skill（有数据时）|
+| 🔴 断点 | 等待用户提供 k8s endpoint URL |
+| Step 4 | 远端连通性验证（3项：/health + /models + smoke test）|
+| Step 5 | Benchmark → 委托 llm-replay-benchmark + qps-benchmark-sweep |
+| Step 6 | 结果分析 → 委托 benchmark-result-analysis + qps-sweep-comparison |
+
+**关键设计**：
+- 每步有跳过条件（检查产物是否已存在），支持跨会话续跑
+- 人工断点：阶段一完成后 AI 主动暂停等待 URL
+- progress.md 标准写入格式
+
+**完成日期**：2026-03-13
 
 ---
 
@@ -192,7 +205,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 ✅ 完成:  llm-replay-benchmark（ziwei-32b poisson_100 + tianji-querysafety-4b peak30min 两模型验证，2026-03-12）
 ✅ 完成:  llm-deployment-docker（tianji-querysafety-4b-v2-3 实测验证，DP=4 PCIe，2026-03-13）
 ✅ 完成:  llm-service-probing（tianji-querysafety-4b-v2-3 安全拦截判型验证，REFACTOR 完毕，2026-03-13）
-Week 2+:  model-evaluation-workflow（依赖前面稳定）
+✅ 完成:  model-evaluation-workflow（8步 Pattern，两阶段+人工断点，2026-03-13）
 ```
 
 ---

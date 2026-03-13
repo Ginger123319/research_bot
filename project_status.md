@@ -633,13 +633,13 @@ benchmark --exp-name hepan_temp_test \
 
 ---
 
-## 📊 项目整体状态（截至 2026-03-12 晚）
+## 📊 项目整体状态（截至 2026-03-13 更新）
 
 | 模型 | 数据处理 | 本地部署 | 平台部署 | 压测 | 分析报告 |
 |------|---------|----------|----------|------|---------|
 | ziwei-32b (xinghan) | ✅ | ✅ | ✅ | ✅ QPS sweep（TP4+TP8）| ✅ REPORT + TP 对比 |
 | ziwei-8b (twostep) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| tianji-querysafety-4b | ✅ | ✅ | ✅ bakv1 | ✅ 回放 1422 RPM | ✅ REPORT.md（含 Grafana）|
+| tianji-querysafety-4b | ✅ | ✅ | ✅ bakv1 | ✅ 回放 1422 RPM + QPS sweep 全范围（4.0~10.0）| ✅ 完整（回放 + 拐点 + 4TP vs 4DP 三份报告）|
 | hepan-72b | ✅ | ⏳ | ✅（同事）| ✅ 回放 150 RPM + QPS sweep | ✅ 完整（×3 报告）|
 
 **Skill 建设进度**：
@@ -650,15 +650,75 @@ benchmark --exp-name hepan_temp_test \
 | `qps-benchmark-sweep` | ✅ 已验证（ziwei/tianji）|
 | `llm-replay-benchmark` | ✅ 已验证（ziwei-32b + tianji-querysafety-4b）|
 | `benchmark-result-analysis` | ✅ 已验证（ziwei/hepan/tianji 三模型）|
-| `qps-sweep-comparison` | ✅ 已验证（hepan + ziwei 双场景）|
+| `qps-sweep-comparison` | ✅ 已验证（hepan + ziwei + tianji 三场景，含 4TP vs 4DP 对比）|
 | `llm-deployment-docker` | ⏳ 待建（下次优先）|
 | `llm-service-probing` | ⏳ 待建 |
 | `model-evaluation-workflow` | ⏳ 待建（依赖前面完成）|
+
+**工具链改进**：
+
+| 改进项 | 状态 |
+|--------|------|
+| `multi_exp_compare.py` YAML 外部配置 | ✅ 完成（`--config` 参数 + `configs/` 目录）|
+| `print_sla_analysis` P95/P99 输出 + 3位精度 | ✅ 完成 |
+
+---
+
+## 🔑 关键技术发现（2026-03-13）
+
+### tianji-querysafety-4b-v2-3 4TP 容量基准
+
+| 维度 | 数值 |
+|------|------|
+| SLA 标准 | E2E P90 ≤ 400ms（主），E2E P95 ≤ 400ms（辅）|
+| **SLA 合规最大 QPS** | **8.0 req/s（480 RPM）** |
+| 拐点类型 | P95 软拐点（QPS=8.5 时 P95=0.422s 首次超标，P90=0.360s 仍 PASS）|
+| 当前业务峰值 | 约 2168 RPM（≈36.1 req/s）|
+| 单实例覆盖比例 | 22%（480/2168）|
+| **推荐扩容方案** | **6 实例 × 4TP（24 卡 H100），含 20% 安全余量** |
+
+### E2E 定义与 SGLang 缓存效应
+
+- `E2E = token_list[-1].timestamp - token_list[0].timestamp`（**服务端处理时间，不含排队**）
+- 高 QPS 下 SGLang 批处理更大、KV Cache 更热 → 服务端延迟可能反而更低（预热效应）
+- 建议剔除 QPS=6.90/7.00 等"缓存骤降"异常点，避免影响趋势分析
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 解决方案 |
+|------|---------|
+| 数据目录无泊松插值文件 | 直接用 `_peak30min.csv` 回放，income_time 保真，等效真实流量 |
+| StrReplace 编码不匹配导致替换失败 | 改用 Python 脚本 open/replace/write 方式绕过 |
+| Shell / StrReplace / Write 工具 "Timeout waiting for bubble creation" | 简单命令（ls/echo）正常；Python 运行用 nohup 后台 + 读文件方式规避；大文件写入改用 Write 直接重写整个文件 |
+| E2E P90 精度不足（1位小数掩盖细节）| print_sla_analysis 改为 3位小数 + 增加 P95/P99 列 |
+
+---
+
+## 🎯 技术决策
+
+- **`_peak30min.csv` 直接回放可行**：Skill 文档中 `_poisson_{RPM}_stitched.csv` 是推荐路径，但当数据源为 CSV（情况 B）且峰值窗口已采样时，直接回放同样有效
+- **`max_completion_tokens 256`**：tianji-querysafety 为安全分类模型，输出极短（平均 ~14 tokens），256 已充分
+- **E2E P90 ≤ 400ms 替代通用 E2E P90 ≤ 150s**：快进快出模型（8K 缓存前缀 + 极短 user input）延迟量级完全不同，通用标准无意义
+- **剔除缓存预热异常点**：QPS=6.90/7.00 因 KV Cache 过热导致延迟骤降，不代表真实趋势，需剔除后再做拐点识别
+- **YAML 外部配置**：避免每次分析都修改源码，`configs/` 目录作为实验配置仓库，文件名按 `model_deploy_date.yaml` 命名规范
+
+---
+
+## ⚠️ 未完成事项
+
+- `llm-deployment-docker` Skill（P0，待建，**下次优先**）
+- `llm-service-probing` Skill（P1，待建）
+- `clingo/docs/models/` 三个模型档案（待建）
+- `clingo/docs/workflow/model-onboarding.md` / `reporting-template.md` 已有修改，待完善
+- `print_sla_analysis` P95/P99 增强代码：已写入，下次运行前请确认文件内容正确
 
 ---
 
 ## 📈 下次会话计划
 
-1. **`llm-deployment-docker` Skill 建设**（P0 参考类，写起来快）
-2. **模型档案**：`clingo/docs/models/tianji-querysafety-4b.md` 等
-3. **`model-onboarding.md` 补充**：tianji-querysafety 作为情况 B 案例写入 SOP
+1. **`llm-deployment-docker` Skill 建设**（P0 参考类，有 3 个参考脚本，写起来快）
+2. **模型档案**：`clingo/docs/models/tianji-querysafety-4b.md` — 结合本次拐点数据填写容量基准
+3. **`model-onboarding.md` 补充**：tianji-querysafety 作为情况 B 案例写入 SOP，补充容量评估环节
+4. **qps-sweep-comparison Skill 更新**：将 tianji 4TP vs 4DP 作为新的参考案例写入，并补充"缓存预热异常点剔除"操作指南

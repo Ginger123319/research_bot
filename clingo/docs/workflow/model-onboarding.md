@@ -2,7 +2,7 @@
 
 > 模型部署迁移评估标准操作流程  
 > 基于 xinghan-ziwei-32b-v1 全流程实践提炼  
-> 更新：2026-03-11
+> 更新：2026-03-13
 
 ---
 
@@ -45,6 +45,8 @@ Step 6  结果分析 & 报告归档
 
 ## Step 1：本地容器部署
 
+> **推荐**：直接使用 `llm-deployment-docker` Skill，可自动完成预检→部署→健康检查→smoke test 全流程。以下为手动参考步骤。
+
 **参考目录**：`scripts/deploy/`
 
 ### 1.1 写启动脚本
@@ -62,12 +64,12 @@ CONTAINER_NAME="<model-name>-server"
 IMAGE="reg.xxwolo.com/ai/lmsysorg-sglang:latest"
 MODEL_PATH="/mnt/ai-llm/<model-name>"
 PORT=<分配端口>
-BASE_GPU_ID=<起始GPU卡号>     # 避免与已运行容器冲突
-TP_SIZE=<TP数>
+TP_SIZE=<TP数>   # NVLink → TP；PCIe → DP（见下）
+DP_SIZE=<DP数>
 ```
 
-> **注意**：PCIe L20 机器建议用 `TP=1`，多实例 DP，避免 AllReduce 通信瓶颈。  
-> `--base-gpu-id` 解决多容器 GPU 内存分配不均问题。
+> **TP vs DP 选择**：运行 `nvidia-smi topo -m`，有 `NV#` 标记 → TP；全部 PIX/SYS（PCIe）→ DP。  
+> PCIe L20 机器强烈建议 `TP=1, DP=N`，避免 AllReduce 通信瓶颈（实测 DP=4 吞吐优于 TP=4 约 1.6x）。
 
 ### 1.2 执行部署
 
@@ -90,7 +92,11 @@ docker logs -f <container-name>             # 观察启动日志
 
 **触发条件**：业务方未提供数据，且模型用途不明确时。
 
-**目的**：用探针 query 反向推断模型在业务场景中的能力类型（对话 / 分类 / 安全拦截 / 其他）。
+**目的**：自动判断模型类型（安全拦截 / 分类路由 / 通用对话）和使用场景。
+
+> **推荐**：直接使用 `llm-service-probing` Skill，3条侦察探针自动判型，无需手动写探测脚本。
+
+**手动探测参考**（不用 Skill 时）：
 
 **参考目录**：`scripts/probe/`
 

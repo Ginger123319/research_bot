@@ -14,38 +14,56 @@
 
 ---
 
-## 项目目标
+## 迁移进度总览
 
-- **统一推理框架**：全面迁移至 SGLang，取代各服务散装、异构的历史部署方案。
-- **裸模型化**：将现有服务中与业务耦合的算法逻辑剥离，标准化为纯推理裸模型服务。
-- **可观测性建设**：完善迁移前后的日志、监控、健康检测体系，为切流决策提供数据依据。
-- **平滑切流**：通过压测与评估脚本，验证新服务承载能力，实现无损流量切换。
-- **旧资源有序释放**：迁移完成后，按计划回收旧部署资源，降低整体运维成本。
-
----
-
-## 当前迁移范围
-
-以下为本次「过番」专项涉及的核心服务（按迁移优先级排列）：
-
-| 服务名 | 模型 | 优先级 | 迁移策略 | 总卡数 | 推理框架 | 业务归属 |
+| 服务 / 模型 | 数据处理 | 本地部署 | 平台部署 | 压测 | 分析报告 | 状态 |
 |---|---|---|---|---|---|---|
-| `tianji-query-safety-4b-v1-1-cmic` | tianji-querysafety-4b-v2-3 | 高优 | 直接迁移·裸模型部署 | 32 | SGLang | 天玑-Query安全改写 |
-| `xinghan-ziwei-32b-v1-cm` | xinghan-ziwei-32b-v1-1 | 高优 | 直接迁移·分离部署 | 16 | SGLang | 紫微-普通-32B |
-| `ziwei-intention-twostep-8b-v1-cm` | 待确认 | 高优 | 直接迁移·裸模型部署 | 4 | - | 算法内部服务 |
-| `sglang-tianji-v2-364-ceceproficient-model` | wangshu-72b-v2 | 低优 | 延后迁移（待下线） | 16 | SGLang | 天玑-闲聊 |
+| `tianji-querysafety-4b-v2-3` | ✅ | ✅ | ✅ bakv1 | ✅ 回放 1422 RPM + QPS sweep | ✅ | **已完成** |
+| `xinghan-ziwei-32b-v1` | ✅ | ✅ | ✅ | ✅ QPS sweep（TP4 + TP8 对比）| ✅ | **已完成** |
+| `ziwei-intention-twostep-8b-v1` | ✅ | ✅ | ✅ | ✅ | ✅ | **已完成** |
+| `xinghan-hepan-72b-v1` | ✅ | ⏳ 同事负责 | ✅ | ✅ 回放 150 RPM + QPS sweep | ✅ | **压测完成** |
 
 ---
 
-## 工作计划（未来 3 周）
+## 工程工具体系（Cursor Agent Skills）
 
-本阶段的核心任务是为后续切流评估做好基础建设：
+本项目在迁移过程中同步建设了一套可复用的 AI Agent 作业技能，支持后续模型的快速评估上线：
 
-| 周次 | 工作重点 |
-|---|---|
-| Week 1 | 环境搭建、迁移脚本框架搭建；高优服务新实例部署与基础联通验证 |
-| Week 2 | 压测脚本开发与执行；性能基线建立（吞吐量、延迟、RPM 上限） |
-| Week 3 | 迁移评估报告输出；切流方案确认；资源回收计划制定 |
+| Skill | 功能 | 状态 |
+|---|---|---|
+| `traffic-dataset-prep` | 从业务日志提取峰值窗口、泊松插值、生成压测数据集 | ✅ 已验证 |
+| `llm-deployment-docker` | Docker + SGLang 本地部署，含 VRAM 预检、健康轮询、冒烟测试 | ✅ 已验证 |
+| `llm-service-probing` | 无业务数据时自动检测模型类型（安全过滤 / 路由 / 对话）| ✅ 已验证 |
+| `llm-replay-benchmark` | 按真实流量时间戳回放压测，验证峰值承载能力 | ✅ 已验证 |
+| `qps-benchmark-sweep` | QPS 阶梯扫描，定位服务容量拐点 | ✅ 已验证 |
+| `benchmark-result-analysis` | 离线分析压测日志，输出 CDF 图表 + HTML 报告 + REPORT.md | ✅ 已验证 |
+| `qps-sweep-comparison` | 多组 QPS sweep 结果可视化对比（如 TP4 vs TP8）| ✅ 已验证 |
+
+---
+
+## 目录结构
+
+```
+guofan/
+├── scripts/
+│   ├── deploy/          # SGLang 本地启动脚本
+│   ├── benchmark/       # QPS sweep / 回放压测脚本
+│   ├── data/            # 数据处理脚本（峰值采样、泊松插值）
+│   ├── probe/           # 模型能力探测脚本
+│   ├── analysis/        # 离线分析脚本
+│   └── serve.py         # 本地推理服务入口
+├── results/             # 各模型分析报告（按需选择性提交）
+├── clingo/
+│   ├── docs/skills/     # Skill 文档库 + 路线图
+│   ├── docs/workflow/   # 模型上线 SOP
+│   └── sessions/        # 历次会话记录
+├── .cursor/skills/      # Cursor Agent Skill 源文件
+├── third_party/         # 第三方依赖（submodule）
+├── progress.md          # 多会话进度日志
+└── project_status.md    # 项目整体状态总结
+```
+
+> `logs/`（86GB）和 `datas/`（7.8GB）已通过 `.gitignore` 排除，不纳入版本控制。
 
 ---
 
@@ -53,10 +71,11 @@
 
 | 字段 | 说明 |
 |---|---|
-| `total_max_rpm` | 服务最大请求并发量（Requests Per Minute） |
-| `stream_max_rpm` | 流式请求最大 RPM |
-| `non_stream_max_rpm` | 非流式请求最大 RPM |
-| `副本数 / 副本卡数` | 服务副本数量及每副本占用 GPU 卡数 |
+| `RPM` | Requests Per Minute，每分钟请求量 |
+| `QPS sweep` | 阶梯式 QPS 扫描测试，用于定位服务容量拐点 |
+| `TTFT / TTFS` | Time to First Token / Time to First Streaming chunk |
+| `E2E` | 端到端响应延迟（从发送到接收完整响应）|
+| `TP` | Tensor Parallelism，张量并行度 |
 | `裸模型` | 仅包含模型推理能力、不含业务逻辑的纯推理服务 |
 | `切流` | 将线上请求从旧服务平滑切换至新服务的操作 |
 
@@ -68,8 +87,8 @@
 |---|---|
 | 运维（Deployment） | 王倪东 |
 | 算法（天玑） | 刘尧 |
-| 算法（紫微/天玑闲聊） | 刘奇、黄继豪 |
-| 数据（AIData） | 刘尧（临时） |
+| 算法（紫微 / 天玑闲聊）| 刘奇、黄继豪 |
+| 数据（AIData） | 刘尧（临时）|
 
 ---
 

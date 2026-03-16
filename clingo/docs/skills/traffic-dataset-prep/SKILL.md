@@ -26,10 +26,12 @@ digraph data_prep {
 }
 ```
 
-### 情况 A：JSONL 线上日志（6 步）
+### 情况 A：JSONL 线上日志（6 步 + 步骤1.5）
 
 ```
-JSONL → [步骤1] DataConverter → _all.csv（按天）
+JSONL → [步骤1] DataConverter → 日期分片 CSV（_2026-MM-DD.csv）+ _all.csv（3列索引，不可用）
+                                      ↓
+                     [步骤1.5] 合并日期分片 → 覆盖写回 _all.csv（6列完整数据）  ← ⚠️ 必须执行
                                       ↓
                         [步骤2] DataSampler → _selected_*.csv（峰值窗口）
                                       ↓
@@ -41,6 +43,11 @@ JSONL → [步骤1] DataConverter → _all.csv（按天）
                                       ↓
                         [步骤6] README.md → 输出目录说明文档
 ```
+
+> **⚠️ DataConverter `_all.csv` 陷阱**：DataConverter 原生输出的 `_all.csv` 是 3 列内部索引文件
+> (`income_time`, `file_suffix`, `original_index`)，**不含 `messages` / `old_response`**。
+> 直接传给 benchmark 工具会触发 `KeyError: 'old_response'`。
+> 必须在步骤1之后执行步骤1.5，将所有日期分片合并覆盖写回为 6 列完整的 `_all.csv`。
 
 ### 情况 B：CSV 源数据 + 系统提示模板填充
 
@@ -102,7 +109,7 @@ from scripts.data_processor.modules.converter import DataConverter
 from scripts.data_processor.modules.sampler import DataSampler
 from scripts.data_processor.modules.interpolator import DataInterpolator
 
-# 步骤1: JSONL → CSV（read_only_time=False 拉取完整 prompt 内容）
+# 步骤1: JSONL → 日期分片 CSV（read_only_time=False 拉取完整 prompt 内容）
 cfg = GlobalConfig(
     input_files=[JSONL_FILE],
     output_dir=OUTPUT_DIR,
@@ -112,6 +119,16 @@ cfg = GlobalConfig(
     auto_confirm=True,
 )
 DataConverter(cfg).run([JSONL_FILE], skip_confirmation=True)
+
+# 步骤1.5: 合并日期分片 → 覆盖写回 _all.csv（6 列完整数据）
+# DataConverter 的 _all.csv 是 3 列索引文件，不可直接用于 benchmark，必须执行此步骤
+all_csv = Path(OUTPUT_DIR) / f"{MODEL_NAME}_all.csv"
+day_csvs = sorted(Path(OUTPUT_DIR).glob(f"{MODEL_NAME}_2[0-9][0-9][0-9]-*.csv"))
+df_full = pd.concat([pd.read_csv(p) for p in day_csvs], ignore_index=True)
+df_full = df_full.sort_values("income_time").reset_index(drop=True)
+df_full["old_response"] = df_full["old_response"].fillna("")
+df_full.to_csv(all_csv, index=False)
+# 此后 _all.csv 即为 6 列完整数据（income_time, prompt, messages, old_response, user_id, line_num）
 
 # 步骤2: 峰值窗口采样
 cfg2 = GlobalConfig(output_dir=OUTPUT_DIR, model_name=MODEL_NAME,
@@ -211,7 +228,8 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 
 | 步骤 | 检查项 |
 |------|--------|
-| 转换后 | `messages` 列有内容（非空）的行数占比；`_all.csv` 行数与 `wc -l input.jsonl` 接近 |
+| 转换后（步骤1） | 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
+| 合并后（步骤1.5） | `_all.csv` 列变为 6 列（`messages`、`old_response` 存在且非空）；行数与日期分片之和一致 |
 | 采样后 | 峰值 RPM 是否符合预期；各段起止时间 |
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
 | 插值后 | 峰值 RPM 达到 `TARGET_RPM`；messages 有内容行数 |
@@ -257,6 +275,7 @@ data-processor convert -i data.jsonl -o output/ -m "xinghan-hepan-72b-v1-2,星�
 | 全量 _all.csv 超过 5 GB | B | 系统提示 per-row 展开后体积爆炸 | 压测使用峰值窗口采样文件 `_peak{N}min.csv` |
 | `income_time` 时区偏移 8 小时 | B | 未做 `tz_convert("Asia/Shanghai")` | 加 `.dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)` |
 | `KeyError: 'prompt'`（benchmark 启动报错）| A/B | benchmark 工具强制要求 CSV 有 `prompt` 列 | 输出列必须包含空 `prompt`：`OUTPUT_COLS = ["income_time", "prompt", "messages", ...]` |
+| `KeyError: 'old_response'`（benchmark 启动报错）| A | 直接使用 DataConverter 输出的 `_all.csv`（3 列索引文件，无 `messages`/`old_response`）| 执行步骤1.5 合并日期分片覆盖写回，或手动合并 `_2026-MM-DD.csv` 文件 |
 
 ---
 

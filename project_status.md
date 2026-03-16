@@ -1,3 +1,118 @@
+# 会话报告 - 2026-03-16（guoxue 模型评估流程推进 & QPS 扫描启动）
+
+## 📌 会话概览
+
+- **日期**：2026-03-16（周一，下午场）
+- **结束时间**：2026-03-16 19:00+
+- **总步骤数**：6（Step 4 验证 + Step 5 修复启动 + 3 项文档更新 + progress 记录）
+- **主要目标**：
+  1. 解除上次会话遗留的 endpoint 404 阻塞（Step 4）
+  2. 修复 QPS 扫描数据集格式问题（`_all.csv` 3列索引 → `_full.csv` 6列完整数据）
+  3. 成功启动 24 档 QPS 扫描（Step 5）
+  4. 同步更新 Skill 和数据处理脚本/文档，固化步骤1.5 合并规范
+- **Git 分支**：main
+
+---
+
+## ✅ 成果
+
+### 1. Step 4：远端连通性验证通过
+- 用户在部署平台完成服务上线后，endpoint 恢复正常
+- `/health` 200、`/v1/models` 200、POST chat/completions 200
+- 平台 serve 的模型 ID 为 `bazi-guoxue-eagle3-test`（非模型路径名）
+- baseline 延迟 2.30s（64 tokens，符合 72B 长推理模型预期）
+- 更新 `model-context.md`：补充 `served_model_id`、`baseline_latency_s` 字段
+
+### 2. QPS 扫描数据集问题修复
+- **根因**：DataConverter 输出的 `_all.csv` 是 3 列内部索引文件，不含 `messages`/`old_response`，benchmark 工具启动即抛 `KeyError: 'old_response'`
+- **修复**：合并两个日期 CSV（`_2026-03-13.csv` + `_2026-03-14.csv`，23,357 行），填充 NaN，输出 `_full.csv`，更新扫描脚本路径
+- **根治**：在 `process_guoxue_full.py` 中增加步骤1.5，未来重跑时自动输出正确的 `_all.csv`
+
+### 3. Step 5：24 档 QPS 扫描正式运行
+- **PID**：1054031/1054057（nohup 后台）
+- **日志目录**：`logs/guoxue_8tp_qps_20260316_163202/`
+- **进度**（截至 ~19:00）：3/24 档（QPS 0.190→0.195→0.200），每档 60min，约 2.1h 已用
+- **预计完成**：2026-03-17 约 17:00
+- 第一档成功率 100%，运行稳定
+
+### 4. 三处联动文档/代码更新
+| 文件 | 操作 | 核心内容 |
+|------|------|---------|
+| `scripts/data/process_guoxue_full.py` | 🐛 修复 | 增加步骤1.5：合并日期分片覆盖写回 6 列 `_all.csv` |
+| `datas/output_guoxue/README.md` | 📝 更新 | 增加步骤1.5 说明、`_full.csv`/`_all.csv` 区别、陷阱注释 |
+| `.cursor/skills/traffic-dataset-prep/SKILL.md` | 📝 更新 | 流程图步骤1.5、新错误条目 `KeyError: 'old_response'`、Checklist 拆分 |
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` | 📝 修改 | Step 4 字段（endpoint、baseline latency）|
+| `datas/output_guoxue/xinghan-guoxue-72b-v1-2-reason_full.csv` | ✨ 新建 | 23,357 行，6 列完整数据，QPS 扫描使用 |
+| `scripts/benchmark/run_guoxue_8tp_qps_sweep.sh` | 📝 修改 | DATASET_PATH 改为 `_full.csv` |
+| `scripts/data/process_guoxue_full.py` | 🐛 修复 | 增加步骤1.5 合并逻辑 |
+| `datas/output_guoxue/README.md` | 📝 更新 | 步骤1.5、文件说明、陷阱注释 |
+| `.cursor/skills/traffic-dataset-prep/SKILL.md` | 📝 更新 | 步骤1.5、新错误条目、Checklist 细化 |
+| `progress.md` | 📝 更新 | 本次会话日志 |
+| `project_status.md` | 📝 更新 | 本文件 |
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 根因 | 解决方案 |
+|------|------|---------|
+| Endpoint 404（Step 4 阻塞） | 平台部署实例未执行"上线"操作，路由未生效 | 用户在平台手动上线后自动恢复，无代码改动 |
+| `KeyError: 'old_response'`（Step 5 首档立即失败） | 扫描脚本指向 DataConverter 输出的 `_all.csv`（3 列索引），benchmark 工具要求 6 列含 `old_response` | 手动合并日期 CSV → `_full.csv`；更新脚本；修复源头脚本步骤1.5 |
+
+---
+
+## 🎯 技术决策
+
+1. **`_full.csv` vs 覆盖 `_all.csv`**：当前扫描脚本使用 `_full.csv`（运行中不改），修复的步骤1.5 在下次重跑时直接覆盖 `_all.csv`，两者数据完全等价，命名统一由下次运行后自动对齐。
+
+2. **DataConverter `_all.csv` 陷阱文档化**：第一次踩到这个坑后立刻在三个地方（脚本、README、Skill）同步记录，防止未来新模型重踩。
+
+3. **`old_response` NaN 填充为 `""`**：benchmark 工具执行 `tokenizer.encode(old_response)` 时需要字符串类型；填空字符串使 `old_response_len=0`，不影响测试逻辑（不使用参考答案）。
+
+---
+
+## ⚠️ 未完成事项
+
+| 事项 | 优先级 | 说明 |
+|------|--------|------|
+| Step 5 QPS 扫描完成 | P0 | 运行中，预计 2026-03-17 ~17:00 完成，共 24 档 |
+| Step 6 结果分析 | P0 | 扫描完成后执行：`offline_analysis.py` + `qps-sweep-comparison` Skill，生成 HTML 报告 + REPORT.md |
+| Step 7 综合评估报告 | P1 | Step 6 完成后，使用 `model-eval-report` Skill 生成 EVAL_REPORT.md |
+| `business_peak_rpm` 确认 | P1 | 用户待提供 Grafana QPM 截图，补入 model-context.md |
+| 回放测试 | ⏭️ 跳过 | 需大量实例，本次评估不执行 |
+| `project_status.md` 定期更新节点 | P2 | Step 6/7 完成后各更新一次 |
+
+---
+
+## 💡 建议与注意事项
+
+- **QPS 扫描不要中断**：72B 长推理模型单档 60 分钟，中断后某档数据会不完整，影响拐点判断。如需中断，记录当前已完成档位，重启时从下一档继续（修改脚本 QPS_LEVELS 列表跳过已完成档位）。
+- **Step 6 分析前检查**：先确认 24 个 `qps_*/result.csv` 文件均存在且非空，再运行 `offline_analysis.py`。
+- **served_model_id 注意**：平台 serve 的模型名是 `bazi-guoxue-eagle3-test`，不是模型路径名，benchmark 工具使用 `model='ignore-model-name'` 绕过，无需额外配置。
+
+---
+
+## 📈 下次会话计划
+
+1. **等待 QPS 扫描完成**（2026-03-17 ~17:00 后）
+2. **Step 6：结果分析**
+   - 运行 `offline_analysis.py` 生成各档 HTML 报告
+   - 使用 `qps-sweep-comparison` Skill 生成对比曲线，定位拐点
+   - 撰写 `REPORT.md` 骨架（P50/P90/P95/P99 数据已预填）
+3. **Step 7：综合评估报告**
+   - 确认 `model-context.md` 所有字段已填（包括 `business_peak_rpm`）
+   - 使用 `model-eval-report` Skill 生成 `EVAL_REPORT.md`
+4. 如需 Grafana QPM 数据，请用户在 Step 6 前提供截图
+
+---
+
 # 会话报告 - 2026-03-11（Skill 体系建设 & tianji-querysafety 压测启动）
 
 ## 📌 会话概览
@@ -1098,22 +1213,67 @@ benchmark --exp-name hepan_temp_test \
 
 | 事项 | 优先级 | 说明 |
 |------|--------|------|
-| `model-evaluation-workflow` GREEN 验证 | P0 | 待下次接入新模型时完整跑一遍验证 |
-| `clingo/docs/models/` 模型档案目录 | P1 | IDEA I1，为每个模型维护技术说明书 |
-| `workflow/reporting-template.md` | P2 | T3，基于 3 个模型 REPORT.md 抽象通用模板 |
-| `llm_benchmark/analysis` 结构化导出 | P3 | T6，绕过截图流失问题 |
+| guoxue QPS Sweep 全部完成 | P0 | `logs/guoxue_8tp_qps_20260316_163202/`，24 档，当前第 1/24 档运行中，预计今晚/明早完成 |
+| process_guoxue_full.py & run_guoxue_8tp_qps_sweep.sh git commit | P0 | 上次 commit 指令 Abort，两个脚本尚未提交（`git status` 显示 untracked） |
+| traffic-dataset-prep SKILL 补充步骤1.5 可跳过说明 | P1 | 已确认：DataSampler 不依赖 `_all.csv` 内容，仅采样管道可跳过步骤1.5；需在 SKILL 中补充条件说明 |
+| `model-evaluation-workflow` GREEN 验证 | P1 | 待下次接入新模型时完整跑一遍验证 |
+| `clingo/docs/models/` 模型档案目录 | P2 | IDEA I1，为每个模型维护技术说明书 |
+| `workflow/reporting-template.md` | P3 | T3，基于 3 个模型 REPORT.md 抽象通用模板 |
 
 ---
 
 ## 💡 建议与注意事项
 
-- `model-evaluation-workflow` 的 GREEN 阶段验证是最重要的下一步：只有在真实新模型接入时跑完整流程，才能发现 Step 卡片之间的衔接问题（比如 Step 2 是否真的可以被 Step 1 带出）
-- 下次接新模型时，优先从算法人员处确认部署规格的形态（命令行 or Dockerfile），以及是否有业务数据，据此判断 Step 2 / Step 3 哪个先跑
+- **DataConverter `_all.csv` 陷阱已文档化**：步骤1.5 是「全量数据直接 benchmark 场景」的必要步骤；若只走 DataSampler 采样管道则可跳过，DataSampler 自己会读日期分片 CSV。建议在下次新模型处理前，先确认是否需要全量 replay（需要则执行步骤1.5，不需要则跳过）。
+- `model-evaluation-workflow` 的 GREEN 阶段验证是最重要的中期目标：只有在真实新模型接入时跑完整流程，才能发现步骤卡片之间的衔接问题
+- guoxue QPS Sweep 跑完后需要用 `qps-sweep-comparison` skill 出分析报告，结合业务 SLA 定拐点
 
 ---
 
 ## 📈 下次会话计划
 
-1. **等待新模型接入**，使用 `model-evaluation-workflow` Skill 完整验证全流程（GREEN 阶段）
-2. 若有新模型：按 Step 0 → Step 1 → ... 完整执行，记录问题，执行 REFACTOR
-3. 若暂无新模型：可以建设 `clingo/docs/models/` 模型档案目录（IDEA I1），补录已跑通的 4 个模型档案
+1. **检查 guoxue QPS Sweep 进度**（`logs/guoxue_8tp_qps_20260316_163202/progress.txt`），若完成则用 `qps-sweep-comparison` skill 出报告
+2. **补交未提交的脚本文件**：`scripts/data/process_guoxue_full.py`、`scripts/benchmark/run_guoxue_8tp_qps_sweep.sh`、`scripts/export_sessions.py`
+3. **traffic-dataset-prep SKILL**：补充步骤1.5 的可跳过条件（DataSampler 路径 vs 全量 benchmark 路径）
+4. 若有新模型接入：按 `model-evaluation-workflow` Skill 完整执行全流程（GREEN 阶段验证）
+
+---
+
+## 📊 最近会话摘要（2026-03-16 T2 — 历史会话导出）
+
+**主要工作**：批量导出 2026-03-14 之前的 Cursor 历史会话，统一编号命名并提交
+
+| 事项 | 结果 |
+|------|------|
+| 识别 7 个 Archived 会话（截图确认） | ✅ 完成 |
+| 比对确认 6 个已导出会话对应的 UUID | ✅ 完成 |
+| 编写 `scripts/export_sessions.py` 批量导出工具 | ✅ 完成（未单独提交） |
+| 导出 17 个未导出会话（Markdown 格式） | ✅ 完成 |
+| 统一重命名全部 24 个会话文件（01-24 顺序编号） | ✅ 完成 |
+| Git Commit `86a62fc` | ✅ 完成（22 文件，10853 行新增） |
+
+**会话文件现状（`clingo/sessions/`）**：
+
+| 编号范围 | 日期 | 内容 |
+|---------|------|------|
+| 01-03 | 2026-03-09 | Docker 权限、项目初始化、部署脚本 |
+| 04-08 | 2026-03-10 | 数据处理、拼接、回放测试、压力测试、日报 |
+| 09-13 | 2026-03-11 | QPS sweep、benchmark、Dockerfile 部署、skill 规划、README |
+| 14-18 | 2026-03-12 | Docker retag、QPS 结果、skill review、可视化、tianji 部署 |
+| 19-24 | 2026-03-13 | QPS 分析、4DP、SLA、skill 下一步、HTTP server、hepan benchmark |
+
+---
+
+## 📊 最近会话摘要（2026-03-16 T1 — 文档整理 + guoxue 数据处理 + QPS Sweep）
+
+**主要工作**：文档整理重组 + guoxue 数据处理脚本完善 + QPS Sweep 启动
+
+| 事项 | 结果 |
+|------|------|
+| 文档目录重组（designs/、planning/ 新建） | ✅ 完成，commit `485d088` |
+| traffic-dataset-prep SKILL 步骤1.5 + DataConverter 陷阱 | ✅ 完成，commit `979b4b3` |
+| process_guoxue_full.py 各步骤产出文件批注 | ✅ 完成（未提交） |
+| guoxue 完整数据处理 | ✅ 完成（5,726 行，峰值 220 RPM） |
+| guoxue 8TP QPS Sweep 启动 | ✅ 进行中（第 1/24 档，约 62%） |
+
+**关键技术发现**：DataConverter 原生 `_all.csv` 是 3 列索引文件（不含 `messages`/`old_response`），DataSampler 会绕过它直接读日期分片 CSV，故现有处理脚本安全；但手动使用 `_all.csv` 做 benchmark 会触发 `KeyError: 'old_response'`。

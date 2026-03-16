@@ -2,6 +2,102 @@
 
 ---
 
+## 🗓️ 会话记录 — 2026-03-16（下午场）
+
+### 📌 会话目标
+`xinghan-guoxue-72b-v1-2-reason` 模型评估流程（guofan 项目）——解除 Step 4 端点 404 阻塞，修复 benchmark 数据集格式问题，启动 24 档 QPS 扫描，并同步更新 Skill 及文档。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. Step 4 远端连通性验证（恢复通过）
+- 上次会话遇到 endpoint 404，本次用户在平台完成服务上线
+- 重新验证：`/health` 200、`/v1/models` 200、POST chat/completions 200，latency=2.30s（64 tokens）
+- 确认平台 serve 的模型 ID 为 `bazi-guoxue-eagle3-test`
+- 更新 `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md`（Step 4 字段）：
+  ```yaml
+  served_model_id: bazi-guoxue-eagle3-test
+  baseline_latency_s: 2.30
+  ```
+
+#### 2. 修复 QPS 扫描数据集问题（`KeyError: 'old_response'`）
+- 发现根因：`process_guoxue_full.py` 步骤1 调用 DataConverter 后，输出的 `_all.csv` 是 3 列内部索引文件（`income_time`, `file_suffix`, `original_index`），**不含 `messages`/`old_response`**
+- 对比 ziwei 数据发现两者 `_all.csv` 的列结构不同，定位为脚本漏掉步骤1.5 合并步骤
+- **修复方案**：将两个日期文件（`_2026-03-13.csv` + `_2026-03-14.csv`，共 23,357 行）合并排序，`old_response` NaN 填充为空字符串，输出为 `_full.csv`
+- 更新扫描脚本 `run_guoxue_8tp_qps_sweep.sh` 的 `DATASET_PATH` 指向 `_full.csv`
+
+#### 3. Step 5 QPS 扫描成功启动
+- **PID**: 1054030
+- **日志**: `logs/guoxue_qps_20260316_163202.log`
+- **输出目录**: `logs/guoxue_8tp_qps_20260316_163202/`
+- **档位**: 24 档，QPS 0.190 → 0.350（两端细 0.005 步长，中间 0.010 步长），每档 60 分钟
+- **预估总耗时**: ~24.5 小时
+- 探路请求成功，首批请求稳定发送（单请求实测 ~45-90s，符合 4K 长推理预期）
+
+#### 4. 文档与脚本三处联动更新
+- **`scripts/data/process_guoxue_full.py`**：
+  - 顶部注释增加"步骤1.5"说明
+  - 代码增加步骤1.5（合并日期分片覆盖写回 `_all.csv`，6 列完整数据）
+- **`datas/output_guoxue/README.md`**：
+  - 处理流程表增加步骤1.5
+  - 核心交付文件表新增 `_full.csv` 说明
+  - 增加 ⚠️ DataConverter `_all.csv` 3列索引说明
+  - 增加 `_all.csv` 列验证结论
+- **`.cursor/skills/traffic-dataset-prep/SKILL.md`**：
+  - 情况A 流程图从"6步"改为"6步 + 步骤1.5"，标注 DataConverter `_all.csv` 不可直接使用
+  - 关键 API 代码块增加步骤1.5 合并代码片段
+  - 常见错误表新增 `KeyError: 'old_response'` 条目
+  - 验证 Checklist 中"转换后"拆分为两行（步骤1 + 步骤1.5）
+
+---
+
+### 🐛 遇到的错误
+
+| 错误 | 阶段 | 现象 |
+|------|------|------|
+| Endpoint 404 | Step 4 | `https://infer-test.geniuworks.com/bazi-guoxue-eagle3-test/v1/chat/completions` 全路径返回 404 |
+| `KeyError: 'old_response'` | Step 5 | benchmark 工具启动时在 `prepare_dataset` 抛出 KeyError，第一档立即失败 |
+
+---
+
+### 🔧 如何解决这些错误
+
+| 错误 | 解决方式 |
+|------|---------|
+| Endpoint 404 | 用户在部署平台执行"上线"操作后自动解除，无需代码修改 |
+| `KeyError: 'old_response'` | 1) 分析 DataConverter 输出结构发现 `_all.csv` 是 3 列索引；2) 手动合并两日日期 CSV 生成 `_full.csv`（6 列）；3) 更新扫描脚本数据集路径；4) 同步修复脚本（步骤1.5）和文档，防止复现 |
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` | 📝 更新 | 补充 Step 4 字段（endpoint 验证结果、baseline 延迟） |
+| `datas/output_guoxue/xinghan-guoxue-72b-v1-2-reason_full.csv` | ✨ 新建 | 两日合并完整数据集，23,357 行，6 列，供 QPS 扫描使用 |
+| `scripts/benchmark/run_guoxue_8tp_qps_sweep.sh` | 📝 修改 | DATASET_PATH 改为 `_full.csv` |
+| `scripts/data/process_guoxue_full.py` | 🐛 修复 | 增加步骤1.5 合并日期分片覆盖写回 `_all.csv` |
+| `datas/output_guoxue/README.md` | 📝 更新 | 增加步骤1.5、`_full.csv` 说明、`_all.csv` 陷阱注释 |
+| `.cursor/skills/traffic-dataset-prep/SKILL.md` | 📝 更新 | 步骤1.5、新错误条目、验证 Checklist 补充 |
+
+---
+
+### 📋 当前状态
+
+| 事项 | 状态 |
+|------|------|
+| Step 0: model-context.md 初始化 | ✅ 完成 |
+| Step 2: llm-service-probing（跳过，已知模型类型） | ⏭️ 跳过 |
+| Step 3: 数据处理（220 RPM Poisson 插值） | ✅ 完成 |
+| Step 4: 远端连通性验证 | ✅ 完成 |
+| Step 5: 24 档 QPS 扫描（PID 1054030） | 🔄 运行中（预计 ~24.5h） |
+| Step 6: 结果分析与报告 | ⏳ 待 Step 5 完成后执行 |
+| Step 7: 综合评估报告 | ⏳ 待 Step 6 后执行 |
+| 回放测试（Step 5 子项）| ⏭️ 跳过（需大量实例，暂不执行）|
+
+---
+
 ## 🗓️ 会话记录 — 2026-03-09
 
 ### 📌 会话目标
@@ -2379,3 +2475,172 @@ nohup python3 scripts/serve.py 8765  --bind 0.0.0.0 --directory logs    &>/tmp/s
 | 模型档案 `tianji-querysafety-4b.md` | ⏳ 待建 |
 | `llm-deployment-docker` Skill | ⏳ 待建（P0） |
 | `llm-service-probing` Skill | ⏳ 待建（P1） |
+
+---
+
+---
+
+## 🗓️ 2026-03-16 会话记录（文档整理 + guoxue 数据处理 + QPS Sweep 启动）
+
+### ✅ 我们实现了哪些功能？
+
+#### 📚 1. 文档整理与目录重组（commit `485d088`）
+- 新增 `model-eval-report` skill（`.cursor/skills/model-eval-report/SKILL.md`、`clingo/docs/skills/model-eval-report/SKILL.md`）
+- 新增 `clingo/docs/designs/2026-03-16-model-eval-report-design.md`
+- 将旧的 `need-todo-idea.md`、`skills-roadmap.md` 迁移至 `clingo/docs/planning/`（新建目录）
+- 将 `2026-03-13-llm-deployment-probing-design.md` 迁移至 `clingo/docs/designs/`
+- 更新 `model-evaluation-workflow` SKILL.md、`model-onboarding.md`、`benchmark-result-analysis` SKILL.md
+- 更新日报、`results/README.md`、`offline_analysis.py`
+
+#### 📚 2. traffic-dataset-prep SKILL.md 补充 DataConverter 陷阱（commit `979b4b3`）
+- 情况 A 流程从「6 步」改为「6 步 + 步骤1.5」
+- 新增步骤1.5：合并日期分片 CSV → 覆盖写回 `_all.csv`（6 列完整数据）
+- 明确说明 DataConverter 原生 `_all.csv` 为 3 列索引文件，不含 `messages`/`old_response`
+- 更新验证 Checklist，区分步骤1 和步骤1.5 的检查项
+- 常见报错表新增 `KeyError: 'old_response'` 条目及修复方式
+
+#### 🔧 3. process_guoxue_full.py 补充产出文件批注
+- 每个 `to_csv()` 调用处新增内联注释，说明文件名、列数、用途（中间产物 / 最终交付）
+- 步骤1.5 处标注 ⚠️ 覆盖 DataConverter 原生 3 列索引文件
+- 步骤5（脏数据过滤）处标注最终交付文件，明确可直接用于 replay benchmark
+- README 生成内容升级：「核心交付文件」→「产出文件一览」，列出全部 8 个产出文件（日期分片 CSV、`_all.csv`、中间选取文件、最终交付文件、可视化）
+
+#### 🚀 4. xinghan-guoxue-72b-v1-2-reason QPS Sweep 启动
+- 执行完整数据处理：`process_guoxue_full.py`，产出 `_poisson_220_stitched.csv`（5,726 行，峰值 220 RPM）
+- 启动 `run_guoxue_8tp_qps_sweep.sh`，实验目录：`logs/guoxue_8tp_qps_20260316_163202/`
+- Sweep 参数：24 档，QPS 0.190 → 0.350，数据集 684 条，远端服务 `bazi-guoxue-eagle3-test`
+- **当前进度（截至本次会话结束）：第 1/24 档（QPS=0.190）约 62% 完成，预计今晚继续跑**
+
+---
+
+### 🐛 我们遇到了哪些错误？
+
+| 错误 | 位置 | 描述 |
+|------|------|------|
+| `KeyError: 'old_response'` | guoxue 数据处理 | DataConverter 产出的 `_all.csv` 是 3 列索引文件，不含 `messages`/`old_response`，直接传给 benchmark 工具报错 |
+| git commit 命令 Abort | 终端 | HEREDOC commit message 中含有特殊字符导致 spawn 失败，最终通过简化 message 解决 |
+
+---
+
+### 🔧 我们是如何解决这些错误的？
+
+1. **`KeyError: 'old_response'` 根因分析**：通过日志 `process_guoxue_20260316_162108.log` 确认，DataConverter 步骤2「生成索引文件」产出的 `_all.csv` 只有 `income_time`、`file_suffix`、`original_index` 三列，是轻量索引文件，而非全量数据。DataSampler 在采样时会回头读日期分片 CSV 拉完整数据，因此本次处理实际未触发报错；但若跳过 DataSampler 直接用 `_all.csv` 做 benchmark，就会中招。
+2. **修复方案**：SKILL.md 新增步骤1.5 + ⚠️ 说明；`process_guoxue_full.py` 增加内联批注和 README 产出文件一览；同时补充说明**步骤1.5 在仅走采样管道时可跳过**（DataSampler 自己读日期分片，不依赖 `_all.csv` 内容）。
+
+---
+
+### 🔧 文件变更汇总
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `clingo/docs/skills/traffic-dataset-prep/SKILL.md` | 📚 更新 | 新增步骤1.5、DataConverter 陷阱说明、KeyError 报错条目 |
+| `scripts/data/process_guoxue_full.py` | 🔧 更新 | 各步骤 `to_csv()` 增加产出文件批注，README 模板升级为「产出文件一览」 |
+| `clingo/docs/skills/model-evaluation-workflow/SKILL.md` | 📚 更新 | 补充完整 step 描述与跳过逻辑 |
+| `clingo/docs/workflow/model-onboarding.md` | 📚 更新 | 完善 onboarding 工作流 |
+| `clingo/docs/skills/benchmark-result-analysis/SKILL.md` | 📚 更新 | 小幅更新 |
+| `clingo/docs/designs/2026-03-16-model-eval-report-design.md` | ✨ 新建 | model-eval-report 设计文档 |
+| `clingo/docs/planning/need-todo-idea.md` | 📁 迁移 | 从 `clingo/docs/` 移至 `planning/` |
+| `clingo/docs/planning/skills-roadmap.md` | 📁 迁移 | 从 `skills/` 移至 `planning/` |
+| `clingo/docs/skills/model-eval-report/SKILL.md` | ✨ 新建 | model-eval-report skill |
+| `.cursor/skills/model-eval-report` | ✨ 新建 | symlink 指向 skill 目录 |
+| `logs/guoxue_8tp_qps_20260316_163202/` | 🚀 生成 | QPS sweep 进行中（24 档） |
+
+---
+
+### 📋 当前状态（本次会话结束）
+
+| 事项 | 状态 |
+|------|------|
+| 文档目录重组 | ✅ 完成 |
+| traffic-dataset-prep SKILL 步骤1.5 补充 | ✅ 完成 |
+| process_guoxue_full.py 产出文件批注 | ✅ 完成 |
+| guoxue 数据处理（process_guoxue_full.py） | ✅ 完成（5,726 行，220 RPM） |
+| guoxue QPS Sweep 启动 | ✅ 已启动，进行中（第 1/24 档，约 62%） |
+| traffic-dataset-prep 步骤1.5 必要性条件补充 | ⏳ 待更新（确认"仅采样管道可跳过"说明是否要加进 SKILL） |
+| process_guoxue_full.py 及 run_guoxue_8tp_qps_sweep.sh | ⏳ 待 git commit（上次提交 Abort，需重新提交） |
+| guoxue QPS Sweep 全部完成 | ⏳ 预计今晚/明早完成 |
+
+---
+
+## 🗓️ 2026-03-16 会话记录（历史会话导出与整理）
+
+### ✅ 我们实现了哪些功能？
+
+#### 📚 1. 识别并确认归档会话
+- 用户提供截图，标识出 Cursor 中已归档（Archived）的 7 个会话：
+  - `Traffic dataset preparation`（e2c18b49）
+  - `Git commit process for SKILL.md`（e46d2efe）
+  - `Chat completions URL testing`（18ed079d）
+  - `Mac安全验证问题`（875a2d8d）
+  - `Default inference parameters in llm_benchmark`（db6c888d）
+  - `QPS testing and SLA analysis for Tianji model`（4c28517a）
+  - `正常工作能力询问`（fd88f0c5）
+
+#### 📚 2. 分析已导出会话与 JSONL 的对应关系
+- 从 `agent-transcripts/` 中识别出所有 2026-03-14 之前的 30 个本地 JSONL 会话
+- 通过内容比对确认 6 个已导出会话对应的 UUID：
+  - `03` = `0302905e`（数据处理）
+  - `10` = `bcbf1eef`（skill 规划讨论）
+  - `13` = `ba78a303`（skill workflow 回顾）
+  - `14` = `29cd9290`（benchmark 可视化）
+  - `15` = `ce316707`（tianji 部署 + 回放测试）
+  - `19` = `19885ffa`（QPS 测试结果分析）
+
+#### ✨ 3. 批量导出 17 个未导出会话
+- 编写 `scripts/export_sessions.py`，将 JSONL 自动转换为 Markdown 格式
+- 跳过 7 个 Archived 会话、6 个已导出会话，成功导出 17 个新文件
+- 导出格式对齐 Cursor 原生导出风格（`**User**` / `**Cursor**` 分隔）
+
+#### ♻️ 4. 统一重命名所有会话文件（01-24 顺序编号）
+- 将全部 24 个会话文件按时间顺序重新编号为 `{nn}_cursor_{topic}.md`
+- 原有文件 `03→04`、`10→12`、`13→16`、`14→17`、`15→18`，保证整体顺序一致
+- 新增 17 个文件填入编号空缺（02、03、05-11、13-15、20-24）
+
+#### 🔧 5. Git Commit
+- commit `86a62fc`：`docs(sessions): export and reorganize pre-2026-03-14 cursor chat sessions`
+- 22 个文件变更，10853 行新增
+
+---
+
+### 🐛 我们遇到了哪些错误？
+
+| 错误 | 描述 | 解决 |
+|------|------|------|
+| Cursor 归档状态无法从服务器端读取 | `agent-transcripts/` 只存储对话内容，无 Archived 标记 | 请用户截图确认，人工识别 7 个归档会话 |
+| 部分 JSONL 消息提取为空 | 用户消息嵌套在 `<user_query>` 标签内，正则需匹配 | `export_sessions.py` 增加 `<user_query>` 提取逻辑 |
+| 文件名含中文导致 shell 截断显示 | ls 输出中文文件名显示不完整 | 不影响功能，重命名后已全部改为英文文件名 |
+
+---
+
+### 🔧 我们是如何解决这些错误的？
+
+1. **归档状态**：Cursor 的归档元数据存储于桌面客户端，服务器端 JSONL 无此信息。通过请求用户截图，准确获取 7 个 Archived 会话 title，再通过首条消息内容逐一匹配 UUID。
+2. **消息提取**：`extract_user_text()` 函数优先从 `<user_query>` 标签中提取净文本，fallback 到去除所有 XML 系统注入标签后的文本。
+3. **命名规范**：先生成带日期+UUID 的中文文件名，再统一通过 rename 脚本重命名为英文编号格式，两步分离降低出错风险。
+
+---
+
+### 🔧 文件变更汇总
+
+| 文件/目录 | 操作 | 说明 |
+|----------|------|------|
+| `clingo/sessions/02~11_cursor_*.md` | ✨ 新建（10个） | 3/9~3/11 期间的新导出会话 |
+| `clingo/sessions/13~15_cursor_*.md` | ✨ 新建（3个） | 3/12 期间的新导出会话 |
+| `clingo/sessions/20~24_cursor_*.md` | ✨ 新建（5个） | 3/13 期间的新导出会话 |
+| `clingo/sessions/03→04_cursor_*.md` | ♻️ 重命名 | 原 03，按时序改为 04 |
+| `clingo/sessions/10→12_cursor_*.md` | ♻️ 重命名 | 原 10，按时序改为 12 |
+| `clingo/sessions/13→16_cursor_*.md` | ♻️ 重命名 | 原 13，按时序改为 16 |
+| `clingo/sessions/14→17_cursor_*.md` | ♻️ 重命名 | 原 14，按时序改为 17 |
+| `clingo/sessions/15→18_cursor_*.md` | ♻️ 重命名 | 原 15，按时序改为 18 |
+| `scripts/export_sessions.py` | ✨ 新建 | JSONL → Markdown 批量导出工具 |
+
+---
+
+### 📋 当前状态（历史会话导出会话结束）
+
+| 事项 | 状态 |
+|------|------|
+| 2026-03-14 前全部会话导出 | ✅ 完成（24 个，跳过 7 个归档 + 1 个已有） |
+| 会话文件统一编号命名 | ✅ 完成（01-24 顺序） |
+| Git Commit | ✅ 完成（`86a62fc`） |
+| scripts/export_sessions.py 提交 | ⏳ 待 commit（用户决定是否保留） |

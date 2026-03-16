@@ -2,26 +2,32 @@
 
 > 模型部署迁移评估标准操作流程  
 > 基于 xinghan-ziwei-32b-v1 全流程实践提炼  
-> 更新：2026-03-13
+> 更新：2026-03-16
 
 ---
 
 ## 总览
 
 ```
+━━━━━━━━━━━━━━━ 阶段一：本地准备 ━━━━━━━━━━━━━━━
 Step 0  信息收集 & 准入确认
     ↓
-Step 1  本地容器部署 & 健康检查
+Step 1  本地容器部署 & 健康检查       → llm-deployment-docker Skill
     ↓
-Step 2  服务探测（仅在无业务数据时）← 可选
+Step 2  服务探测（无业务数据时）← 可选  → llm-service-probing Skill
     ↓
-Step 3  数据处理（JSONL/ShareGPT → 压测 CSV）
-    ↓
+Step 3  数据处理（JSONL → 压测 CSV）← 可选  → traffic-dataset-prep Skill
+
+━━━━━━━━ 🔴 人工断点：等待平台部署，获取 endpoint URL ━━━━━━━━
+
+━━━━━━━━━━━━━━━ 阶段二：远端评估 ━━━━━━━━━━━━━━━
 Step 4  远端服务连通性验证（k8s 平台 endpoint）
     ↓
-Step 5  Benchmark 执行（QPS 扫描 / 压力测试）
+Step 5  Benchmark 执行（回放 + QPS 扫描）  → llm-replay-benchmark / qps-benchmark-sweep Skill
     ↓
-Step 6  结果分析 & 报告归档
+Step 6  结果分析 & 报告归档               → benchmark-result-analysis / qps-sweep-comparison Skill
+    ↓
+Step 7  生成综合评估报告                  → model-eval-report Skill
 ```
 
 ---
@@ -40,6 +46,19 @@ Step 6  结果分析 & 报告归档
 | 业务数据 | JSONL 日志路径（`/mnt/ai-infra/datasets/`）或无 | 业务方 |
 | 平台服务 URL | k8s 部署后的 endpoint | 平台部署后获取 |
 | 业务联系人 | 算法负责人，用于确认模型用途 | 迁移清单 |
+
+**model-context.md 初始化**（写入 `results/models/<model-name>/model-context.md`，目录不存在则创建）：
+
+```yaml
+model_name: <model-name>
+model_path: <model_path>
+image: <image>
+tp_size: <n>
+dp_size: <n>
+gpu_ids: "<ids>"
+gpu_type: <型号，如 L20 / H100>
+max_completion_tokens: <n 或 未提供>
+```
 
 ---
 
@@ -118,6 +137,13 @@ python scripts/probe/probe_<model-name>.py    # 针对新模型的定制探测
 
 > 遇到输出循环重复：加 `"repetition_penalty": 1.1` 到请求参数。
 
+**model-context.md 追加**：
+
+```yaml
+model_type: <安全拦截模型 / 分类路由模型 / 通用对话模型>
+usage_scenario: <使用场景描述>
+```
+
 ---
 
 ## Step 3：数据处理
@@ -173,6 +199,13 @@ python scripts/data/process_<model-name>_full.py
 {MODEL_NAME}_all.csv                                                    ← 全量压力测试
 ```
 
+**model-context.md 追加**：
+
+```yaml
+business_peak_rpm: <n>
+dataset_path: <最终数据集路径>
+```
+
 ---
 
 ## Step 4：远端服务连通性验证
@@ -199,6 +232,13 @@ python scripts/probe/test_remote_services.py
 - [ ] 响应延迟合理（首 token <5s 为正常）
 - [ ] 与本地服务响应一致性（同一 prompt 输出风格相符）
 
+**model-context.md 追加**：
+
+```yaml
+endpoint_url: <URL>
+baseline_latency_s: <首次响应秒数>
+```
+
 ---
 
 ## Step 5：Benchmark 执行
@@ -207,11 +247,13 @@ python scripts/probe/test_remote_services.py
 
 ### 5.1 选择测试策略
 
-| 策略 | 脚本 | 适用场景 |
-|------|------|----------|
-| QPS 拐点扫描 | `run_<model>_<tp>_qps_benchmark.sh` | 找最大承载 QPS |
-| 高 QPS 边界探索 | `run_<model>_<tp>_high_qps_explore.sh` | 已知大致范围后精细扫描 |
-| 全量压力测试 | `run_<model>_<tp>_qps_stress.sh` | 验证长时间稳定性 |
+> **推荐**：有业务数据时先跑回放、再跑 QPS 扫描，分别调用对应 Skill。
+
+| 策略 | Skill | 适用场景 |
+|------|-------|----------|
+| 峰值回放测试 | `llm-replay-benchmark` Skill | 有业务数据时，验证真实流量下成功率/延迟 SLA |
+| QPS 拐点扫描 | `qps-benchmark-sweep` Skill | 找最大承载 QPS（后台执行，耗时数小时）|
+| 无业务数据 | 仅 `qps-benchmark-sweep` | 以全量数据集扫描替代 |
 
 ### 5.2 关键参数
 
@@ -246,6 +288,15 @@ tail -f logs/<model>_<tp>_qps_*.log
 cat logs/<model>_<tp>_qps_<timestamp>/progress.txt
 ```
 
+**model-context.md 追加**（回放完成后）：
+
+```yaml
+replay_success_rate: <n>%
+replay_ttft_p90_s: <x>
+replay_ttfs_p90_s: <x>
+replay_e2e_p90_s: <x>
+```
+
 ---
 
 ## Step 6：结果分析 & 归档
@@ -266,29 +317,47 @@ logs/<model>_<tp>_qps_<date>_all/
 
 ### 6.2 分析工具
 
-`analysis` 是 `llm-benchmark` 包安装后注册的 CLI 命令，启动一个本地 Dash Web 服务，在浏览器中加载和浏览 benchmark 结果。
+**回放结果分析**（`benchmark-result-analysis` Skill）：
 
 ```bash
-source .venv/bin/activate
-
-# 启动分析服务（默认端口 8050）
-analysis --host 0.0.0.0 --port 8050 --exp /path/to/logs/<experiment-dir>
-
-# 示例
-analysis --host 0.0.0.0 --exp /mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/ziwei_4tp_qps_20260310_150343
+# 调用 offline_analysis.py，自动生成 HTML + PNG + REPORT.md 骨架
+.venv/bin/python scripts/analysis/offline_analysis.py \
+  --csv  logs/<exp_dir>/<exp_name>.csv \
+  --out  results/<report_dir>/<exp_name>_analysis.html \
+  --png-dir   results/<report_dir> \
+  --model-name "<model-name>"
 ```
 
-浏览器访问 `http://localhost:8050`，在页面中浏览各 QPS 档位的详细结果，截图关键图表放入 `results/`。
+脚本终端直接打印 REPORT.md 骨架，含 TTFT/TTFS/E2E 的 P50/P90/P95/P99 真实数值（无需读图）。
 
-> `--exp` 指向实验根目录（含多个 `qps_X.XX/` 子目录），或单个档位子目录。
+**QPS 扫描结果分析**（`qps-sweep-comparison` Skill）：多组对比、拐点识别、SLA 合规评估。
+
+> 如需用旧版交互式 Dash 面板手动探索数据（供调试用）：
+> ```bash
+> source .venv/bin/activate
+> analysis --host 0.0.0.0 --port 8050 --exp /path/to/logs/<experiment-dir>
+> ```
+> 浏览器访问 `http://localhost:8050`，`--exp` 指向含多个 `qps_X.XX/` 子目录的根目录。
 
 ### 6.3 结果归档
 
 ```
-results/<task-name>_<date>/
-  REPORT.md              ← 量化报告（参考 reporting-template.md）
+results/<task-name>_<date>/          ← 单次实验报告
+  REPORT.md                          ← 量化报告（含 P50/P90/P95/P99 真实数值）
   llm_benchmark_summary.md
-  *.png / *.html         ← 截图与可视化
+  *.png / *.html                     ← 图表与可视化
+
+results/models/<model-name>/         ← 模型维度汇总（跨实验）
+  model-context.md                   ← 结构化上下文，Step 0–6 增量写入
+  EVAL_REPORT.md                     ← Step 7 生成的综合评估报告
+```
+
+**model-context.md 追加**（QPS 扫描分析后）：
+
+```yaml
+sla_max_qps: <x>
+sla_threshold: "<模型特定 SLA 门限，如 E2E P95 ≤ 400ms>"
+inflection_type: <软拐点 / 硬拐点，及触发指标说明>
 ```
 
 ### 6.4 量化报告关键指标
@@ -302,16 +371,49 @@ results/<task-name>_<date>/
 
 ---
 
+## Step 7：生成综合评估报告
+
+> **推荐**：直接使用 `model-eval-report` Skill，自动读取 `model-context.md` 和各 REPORT.md 生成综合交付报告。
+
+**触发条件**：Step 6 完成，`model-context.md` 中核心字段（`sla_max_qps`、`business_peak_rpm`）已填写。
+
+**调用**：`model-eval-report` Skill
+- 传入：模型名称（用于定位 `results/models/<model-name>/`）
+- Skill 自动完成：读取 `model-context.md` → 扫描实验 `REPORT.md` → 计算资源建议 → 输出 `EVAL_REPORT.md`
+
+**产物**：
+
+```
+results/models/<model-name>/EVAL_REPORT.md
+  ├── 第一层：业务摘要（上线建议、推荐规模、资源估算）
+  └── 第二层：技术明细（延迟分布、QPS 容量、回放验证详情）
+```
+
+**资源建议计算逻辑**（Skill 自动执行）：
+
+```
+业务峰值 req/s  = business_peak_rpm ÷ 60
+最低实例数      = ceil(业务峰值 req/s ÷ sla_max_qps)
+推荐实例数      = ceil(业务峰值 req/s ÷ (sla_max_qps × 0.9))   # 90% 负载率，留 10% 余量
+GPU 总数        = 推荐实例数 × tp_size
+```
+
+---
+
 ## 接入检查清单
 
 ```
-[ ] Step 0: 收集模型信息（路径 / GPU / TP / 业务数据 / 平台 URL）
+━━━━━━━━━ 阶段一：本地准备 ━━━━━━━━━
+[ ] Step 0: 收集模型信息，model-context.md 已初始化
 [ ] Step 1: 本地容器启动，健康检查通过
-[ ] Step 2: 探测完成（如需），行为特征已记录
-[ ] Step 3: 压测数据集已生成，峰值 RPM 达标，脏数据已过滤
-[ ] Step 4: 远端 endpoint 连通性验证通过
-[ ] Step 5: QPS 扫描完成，日志已保存
-[ ] Step 6: 结果合并 & 分析，报告已归档到 results/
+[ ] Step 2: 探测完成（如需），模型类型已记录，model-context.md 已追加
+[ ] Step 3: 压测数据集已生成，峰值 RPM 达标，脏数据已过滤，model-context.md 已追加
+
+━━━━━━━━━ 阶段二：远端评估 ━━━━━━━━━
+[ ] Step 4: 远端 endpoint 连通性验证通过，model-context.md 已追加 URL
+[ ] Step 5: 回放测试 & QPS 扫描完成，日志已保存，model-context.md 已追加 P90
+[ ] Step 6: 结果分析完成，REPORT.md 核心数值已填写（无 <见图> 占位），model-context.md 已追加拐点 QPS
+[ ] Step 7: EVAL_REPORT.md 已生成，上线建议明确，推荐规模已计算
 ```
 
 ---

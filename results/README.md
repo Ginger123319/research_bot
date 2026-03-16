@@ -172,4 +172,5 @@
 
 - 已跑通模型清单 → [`clingo/docs/README.md`](../clingo/docs/README.md)
 - 新模型接入 SOP → [`clingo/docs/workflow/model-onboarding.md`](../clingo/docs/workflow/model-onboarding.md)
-- Skill 体系 → [`clingo/docs/skills/skills-roadmap.md`](../clingo/docs/skills/skills-roadmap.md)
+- Skill 体系 → [`clingo/docs/planning/skills-roadmap.md`](../clingo/docs/planning/skills-roadmap.md)
+- **模型评估报告** → [`results/models/`](models/)

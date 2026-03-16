@@ -37,6 +37,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 | `llm-service-probing` | P1 | ✅ 已验证 | `clingo/docs/skills/llm-service-probing/` |
 | `benchmark-result-analysis` | P2 | ✅ 完成 | offline_analysis.py（HTML + PNG + REPORT 骨架）|
 | `model-evaluation-workflow` | P2 | ✅ 完成 | `clingo/docs/skills/model-evaluation-workflow/` |
+| `model-eval-report` | P2 | ✅ 已验证 | `clingo/docs/skills/model-eval-report/` |
 
 ---
 
@@ -169,6 +170,25 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ---
 
+### ⬜ `model-eval-report`（P2，待验证）
+
+**类型**：Technique + Pattern
+**触发条件**：全流程评估完成（Step 6 归档后），生成面向交付的综合评估报告
+**覆盖内容**：
+
+| 步骤 | 内容 |
+|------|------|
+| 输入读取 | `model-context.md`（增量结构化上下文）+ 各实验 `REPORT.md` |
+| 资源计算 | `推荐实例数 = ceil(业务峰值 / QPS × 0.9)`，GPU 总数，单实例覆盖率 |
+| 报告生成 | 两层结构：摘要层（业务方）+ 技术层（infra 存档）|
+| 集成 | 作为 `model-evaluation-workflow` Step 7 调用 |
+
+**与 model-evaluation-workflow 的关系**：Step 0~6 每步增量写入 `model-context.md`，Step 7 调用本 Skill 读取汇总
+**设计文档**：`clingo/docs/designs/2026-03-16-model-eval-report-design.md`
+**验证状态**：⬜ 待用 tianji-querysafety-4b-v2-3 实测（产物最完整）
+
+---
+
 ### ✅ `model-evaluation-workflow`（P2，完成）
 
 **类型**：Pattern（流程编排）  
@@ -205,7 +225,8 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 ✅ 完成:  llm-replay-benchmark（ziwei-32b poisson_100 + tianji-querysafety-4b peak30min 两模型验证，2026-03-12）
 ✅ 完成:  llm-deployment-docker（tianji-querysafety-4b-v2-3 实测验证，DP=4 PCIe，2026-03-13）
 ✅ 完成:  llm-service-probing（tianji-querysafety-4b-v2-3 安全拦截判型验证，REFACTOR 完毕，2026-03-13）
-✅ 完成:  model-evaluation-workflow（8步 Pattern，两阶段+人工断点，2026-03-13）
+✅ 完成:  model-evaluation-workflow（9步 Pattern，两阶段+人工断点+Step 7 报告生成，2026-03-13/16）
+✅ 完成:  model-eval-report（两层交付报告，model-context.md 增量输入，资源建议计算，tianji-querysafety-4b-v2-3 实测验证，2026-03-16）
 ```
 
 ---

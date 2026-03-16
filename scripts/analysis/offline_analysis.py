@@ -308,15 +308,34 @@ def build_latency_hist(latency_dist):
     return fig
 
 
+# ── 分位数计算 ────────────────────────────────────────────────
+def compute_percentiles(latency_dist):
+    """计算 TTFT / TTFS / E2E 的 P50/P90/P95/P99，供汇总表和 REPORT 骨架使用。"""
+    result = {}
+    for metric in ["ttft", "ttfs", "e2e"]:
+        vals = latency_dist.get(metric, [])
+        if vals:
+            arr = np.array([v for v in vals if v is not None], dtype=float)
+            for pct, label in [(50, "p50"), (90, "p90"), (95, "p95"), (99, "p99")]:
+                result[f"{metric}_{label}"] = float(np.percentile(arr, pct))
+    return result
+
+
 # ── 指标汇总表 ────────────────────────────────────────────────
-def metrics_to_html(metrics, csv_name):
+def metrics_to_html(metrics, csv_name, percentiles=None):
     m = metrics
+    p = percentiles or {}
     lat = {
         "ttft": m.get("ttft_mean", 0),
         "ttfs": m.get("ttfs_mean", 0),
         "tpot": m.get("tpot_mean", 0),
         "e2e":  m.get("e2e_mean", 0),
     }
+
+    def _pval(key):
+        v = p.get(key)
+        return f"{v:.3f} s" if v is not None else "—"
+
     rows = [
         ("实验文件",         csv_name),
         ("总请求数",         f"{int(m['all_cnt'])}"),
@@ -326,9 +345,21 @@ def metrics_to_html(metrics, csv_name):
         ("总耗时",           f"{m['total_duration']:.1f} s"),
         ("",                 ""),
         ("TTFT 均值",        f"{lat['ttft']:.3f} s"),
+        ("TTFT P50",         _pval("ttft_p50")),
+        ("TTFT P90",         _pval("ttft_p90")),
+        ("TTFT P95",         _pval("ttft_p95")),
+        ("TTFT P99",         _pval("ttft_p99")),
+        ("",                 ""),
         ("TTFS 均值",        f"{lat['ttfs']:.3f} s"),
-        ("TPOT 均值",        f"{lat['tpot']:.3f} s"),
+        ("TTFS P90",         _pval("ttfs_p90")),
+        ("",                 ""),
         ("E2E 均值",         f"{lat['e2e']:.3f} s"),
+        ("E2E P50",          _pval("e2e_p50")),
+        ("E2E P90",          _pval("e2e_p90")),
+        ("E2E P95",          _pval("e2e_p95")),
+        ("E2E P99",          _pval("e2e_p99")),
+        ("",                 ""),
+        ("TPOT 均值",        f"{lat['tpot']:.3f} s"),
         ("",                 ""),
         ("Prefill 吞吐",     f"{m['prefill_throughput']:.1f} tok/s"),
         ("Decode 吞吐",      f"{m['decode_throughput']:.1f} tok/s"),
@@ -468,11 +499,15 @@ def export_timeline_pngs(timeline_plots, png_dir: Path):
     return saved
 
 
-def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Path):
+def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Path, percentiles=None):
     """在终端打印 REPORT.md 骨架，包含预填数字、图片引用、Grafana 提示。"""
     m = metrics
-    s = pd.Series  # shorthand
+    p = percentiles or {}
     now = datetime.now().strftime("%Y-%m-%d")
+
+    def _pval(key, fallback="<见图>"):
+        v = p.get(key)
+        return f"{v:.3f} s" if v is not None else fallback
 
     skeleton = f"""
 ╔══════════════════════════════════════════════════════════════╗
@@ -531,11 +566,10 @@ def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Pat
 | 分位数 | 值 |
 |--------|----|
 | Mean   | {m['ttft_mean']:.3f} s |
-| P50    | <见图> |
-| P90    | <见图> |
-| P99    | <见图> |
-| P100   | <见图> |
-
+| P50    | {_pval('ttft_p50')} |
+| P90    | {_pval('ttft_p90')} |
+| P95    | {_pval('ttft_p95')} |
+| P99    | {_pval('ttft_p99')} |
 ![TTFT CDF](ttft_cdf.png)
 
 #### TTFS（首句响应时间）
@@ -543,6 +577,7 @@ def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Pat
 | 分位数 | 值 |
 |--------|----|
 | Mean   | {m['ttfs_mean']:.3f} s |
+| P90    | {_pval('ttfs_p90')} |
 
 ![TTFS CDF](ttfs_cdf.png)
 
@@ -551,6 +586,10 @@ def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Pat
 | 分位数 | 值 |
 |--------|----|
 | Mean   | {m['e2e_mean']:.3f} s |
+| P50    | {_pval('e2e_p50')} |
+| P90    | {_pval('e2e_p90')} |
+| P95    | {_pval('e2e_p95')} |
+| P99    | {_pval('e2e_p99')} |
 
 ![E2E CDF](e2e_cdf.png)
 
@@ -602,8 +641,9 @@ def print_report_skeleton(metrics, png_dir: Path, model_name: str, csv_path: Pat
 | 验证项 | 结论 |
 |--------|------|
 | 可用性（成功率 > 99.9%）| {'✅' if m['success_rate'] > 0.999 else '❌'} {m['success_rate']*100:.2f}% |
-| TTFT P90 | <填写判断标准和值> |
-| E2E P90  | <填写判断标准和值> |
+| TTFT P90 | {_pval('ttft_p90')} |
+| E2E P90  | {_pval('e2e_p90')} |
+| E2E P95  | {_pval('e2e_p95')} |
 | 峰值压力覆盖 | <填写 RPM> |
 
 ### 5.2 上线建议
@@ -671,6 +711,7 @@ def main():
 
     print("[3/4] 生成图表...")
     latency_dist = plots["latency distribution"]
+    percentiles  = compute_percentiles(latency_dist)
     cdf_ttft    = build_cdf_figure(latency_dist["ttft"],     "TTFT")
     cdf_ttfs    = build_cdf_figure(latency_dist["ttfs"],     "TTFS")
     cdf_tpot    = build_cdf_figure(latency_dist["user_tpot"],"User-TPOT")
@@ -690,7 +731,7 @@ def main():
         f"<h1>Benchmark 分析报告</h1>"
         f"<p>来源文件: <code>{csv_path}</code></p>"
         f"<p>生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>",
-        metrics_to_html(metrics, csv_path.name),
+        metrics_to_html(metrics, csv_path.name, percentiles=percentiles),
         "<h2>CDF 图</h2>",
         "<p style='font-size:13px;color:#555;margin:4px 0 8px'>",
         "User-TPOT：每请求平均 TPOT（3035条）；"
@@ -719,14 +760,17 @@ def main():
     print(f"   文件大小: {out_path.stat().st_size / 1024:.0f} KB")
 
     # 核心指标终端打印
+    p = percentiles
     print("\n──────────── 核心指标 ────────────")
     print(f"  总请求数:     {int(metrics['all_cnt'])}")
     print(f"  成功率:       {metrics['success_rate']*100:.2f}%")
     print(f"  成功 QPS:     {metrics['success_qps']:.3f} req/s")
     print(f"  TTFT 均值:    {metrics['ttft_mean']:.3f} s")
-    print(f"  TTFS 均值:    {metrics['ttfs_mean']:.3f} s")
+    print(f"  TTFT P50/P90/P95/P99: {p.get('ttft_p50',0):.3f} / {p.get('ttft_p90',0):.3f} / {p.get('ttft_p95',0):.3f} / {p.get('ttft_p99',0):.3f} s")
+    print(f"  TTFS 均值:    {metrics['ttfs_mean']:.3f} s  P90: {p.get('ttfs_p90',0):.3f} s")
+    print(f"  E2E  均值:    {metrics['e2e_mean']:.3f} s")
+    print(f"  E2E  P50/P90/P95/P99: {p.get('e2e_p50',0):.3f} / {p.get('e2e_p90',0):.3f} / {p.get('e2e_p95',0):.3f} / {p.get('e2e_p99',0):.3f} s")
     print(f"  TPOT 均值:    {metrics['tpot_mean']:.3f} s")
-    print(f"  E2E 均值:     {metrics['e2e_mean']:.3f} s")
     print(f"  Prefill:      {metrics['prefill_throughput']:.1f} tok/s")
     print(f"  Decode:       {metrics['decode_throughput']:.1f} tok/s")
     print(f"  Overall:      {metrics['overall_throughput']:.1f} tok/s")
@@ -737,7 +781,7 @@ def main():
         print(f"\n[PNG] 导出图表到 {png_dir} ...")
         export_cdf_pngs(latency_dist, png_dir)
         export_timeline_pngs(plots["timeline_plots"], png_dir)
-        print_report_skeleton(metrics, png_dir, args.model_name, csv_path)
+        print_report_skeleton(metrics, png_dir, args.model_name, csv_path, percentiles=percentiles)
         print(f"\n✅ PNG 已导出，REPORT.md 骨架已打印（含 Grafana 截图提示）")
 
 

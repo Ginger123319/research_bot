@@ -65,7 +65,10 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 | `concurrency_timeline.png` | 活跃请求数 / RPS / CPS 时间线 |
 | `success_rate_timeline.png` | 请求成功率时间线（60s 滑动窗口）|
 
-同时终端打印 **REPORT.md 骨架**（含所有量化数据和图片引用）。
+同时终端打印 **REPORT.md 骨架**，包含：
+- 所有量化数据（成功率、QPS、吞吐量）
+- **TTFT / TTFS / E2E 的 P50/P90/P95/P99 真实数值**（已自动计算，无需手动读图）
+- 图片引用 + Grafana 截图提示
 
 ### Step 4 — 获取 Grafana 截图（手动）
 
@@ -84,9 +87,11 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 - **§一 背景与目的**：迁移/上线背景、测试目标
 - **§二 2.1 数据构建流程**：参考 traffic-dataset-prep Skill 描述
-- **§三 3.2 延迟分位数**：从 HTML 报告或 PNG 读出 P50/P90/P99
+- **§三 3.2 延迟分位数**：**骨架已预填 P50/P90/P95/P99 真实数值，直接复制即可，无需手动读图**
 - **§四 有效性论证**：数据真实性、流量充分性、与 Grafana 比对
 - **§五 结论与上线建议**：业务判断
+
+> ⚠️ **延迟表填写规范**：REPORT.md 的延迟分布表必须包含具体数值（`offline_analysis.py` 已自动生成），**不允许留 `<见图>` 占位符**——`<见图>` 会导致 `model-context.md` 和 `EVAL_REPORT.md` 无法自动读取 P90 数据。
 
 ---
 
@@ -122,7 +127,7 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 |------|------|------|
 | `load_exp_csv` 返回 error | CSV 格式不符合 benchmark 工具输出规范 | 检查 CSV 是否来自 `benchmark` 命令的 output-dir |
 | PNG 中文标题显示为方块 | 系统无 CJK 字体 | 已改为全英文标签，无需处理 |
-| 骨架中 `<见图>` 未自动填写 | P50/P90/P99 需从 PNG/HTML 读取 | 打开 HTML 交互图悬停查看，或用 `multi_exp_cli.py` 批量提取 |
+| 骨架中仍出现 `<见图>` | `offline_analysis.py` 版本过旧，未包含分位数计算 | 确认使用最新版脚本（2026-03-16 后），P50/P90/P95/P99 已自动填入 |
 
 ---
 

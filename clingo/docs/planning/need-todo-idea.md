@@ -41,7 +41,18 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 
 问题：HTML 报告中的结构化数据（请求粒度统计、TTFT 分布等）在截图后流失，无法跨模型对比。
 
-**解法方向**：从 `llm_benchmark/analysis` 中间输出直接导出结构化数据，绕过截图。暂不做，等梳理分析流程时深入。
+**解法方向**：从 `llm_benchmark/analysis` 中间输出直接导出结构化数据，绕过截图。
+
+**2026-03-16 根因定位**：问题的入口比原来想的更具体——
+
+`offline_analysis.py` 生成的 HTML 汇总表（核心指标）**只输出 mean 值**，没有 P90/P95/P99。P90 数据只内嵌在 Plotly CDF 图表数组中，无法被 AI 或脚本直接读取。
+
+这导致：
+- REPORT.md 里 P90 只能写"见 HTML"，无法填具体数值
+- `model-context.md` 只能记录 mean，`EVAL_REPORT.md` 的延迟字段残缺
+- 跨模型对比无法自动化
+
+**T6 的第一步（已明确）**：修改 `offline_analysis.py`，在汇总表中**新增 P50 / P90 / P95 / P99 行**（至少 TTFT 和 E2E）。这是整个结构化导出链路的最小可行切入点，不需要改其他工具。
 
 ---
 
@@ -49,7 +60,7 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 
 `.cursor/skills/` 下目前只有通用的 `brainstorming`，没有针对本工程的专属 Skill。
 
-**解法**：按路线图逐步建设（见 `skills/skills-roadmap.md`）。
+**解法**：按路线图逐步建设（见 `planning/skills-roadmap.md`）。
 
 ---
 
@@ -70,7 +81,9 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 - [x] **T4** `llm-deployment-docker` Skill ✅ 已验证（预检+DP/TP推荐+健康检查，tianji-4b 实测，2026-03-13）
 - [x] **T4.5** `llm-service-probing` Skill ✅ 已验证（3探针自动判型，安全拦截/分类/对话，REFACTOR 完毕，2026-03-13）
 - [x] **T5** `qps-benchmark-sweep` Skill ✅ 已验证（ziwei / tianji 实测）
-- [ ] **T6** 梳理 `llm_benchmark/analysis` 中间输出，规划结构化导出方案
+- [x] **T6** 修改 `offline_analysis.py`，在汇总表新增 P50/P90/P95/P99（TTFT + E2E），同步更新 `benchmark-result-analysis` Skill 要求 REPORT.md 必须填 P90 数值 ✅ 已完成（2026-03-16，tianji 回放实测验证）
+  - 根因见 N3 更新（2026-03-16）
+  - 完成后同步更新 `model-context.md` 字段（`replay_ttft_p90_s`、`replay_e2e_p90_s`），EVAL_REPORT.md 延迟表可完整填写
 - [x] **T7** `benchmark-result-analysis` Skill ✅ 已完成（offline_analysis.py + PNG + REPORT 骨架，ziwei / hepan / tianji 多模型验证）
 - [x] **T7.5** `llm-replay-benchmark` Skill ✅ 已验证（ziwei-32b poisson_100 + tianji-querysafety-4b peak30min，2026-03-12）
 - [x] **T8** `model-evaluation-workflow` Skill ✅ 已完成（顶层 Pattern，两阶段+人工断点，7步卡片+跳过条件，2026-03-13）

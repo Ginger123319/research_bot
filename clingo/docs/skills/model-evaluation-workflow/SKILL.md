@@ -31,6 +31,7 @@ description: Use when onboarding a new LLM model end-to-end — from local Docke
                                         → llm-replay-benchmark Skill（有数据时）
   Step 6  结果分析 & 报告归档           → benchmark-result-analysis Skill
                                         → qps-sweep-comparison Skill
+  Step 7  生成评估报告                  → model-eval-report Skill
 ```
 
 ---
@@ -45,7 +46,8 @@ description: Use when onboarding a new LLM model end-to-end — from local Docke
 ls datas/output_<model>/           # Step 3 产物
 docker ps | grep <model>           # Step 1 产物
 ls logs/<model>_*_qps_*/           # Step 5 产物
-ls results/<model>_*/REPORT.md    # Step 6 产物
+ls results/<model>_*/REPORT.md     # Step 6 产物
+ls results/models/<model>/EVAL_REPORT.md  # Step 7 产物
 ```
 
 向用户说明当前进度后继续。
@@ -117,6 +119,18 @@ Step 5 benchmark 执行时透传，确保测试条件对齐业务真实调用。
 - 推理参数：<json 或 "未提供">
 ```
 
+**model-context.md 初始化**（写入 `results/models/<model-name>/model-context.md`，目录不存在则创建）：
+```yaml
+model_name: <model-name>
+model_path: <model_path>
+image: <image>
+tp_size: <n>
+dp_size: <n>
+gpu_ids: "<ids>"
+gpu_type: <型号，如 L20 / H100>
+max_completion_tokens: <n 或 未提供>
+```
+
 ---
 
 ## Step 1：本地 Docker 部署
@@ -161,6 +175,12 @@ curl -sf http://localhost:<port>/health  # 服务已健康
 - 注意事项：<如有，否则"无">
 ```
 
+**model-context.md 追加**：
+```yaml
+model_type: <安全拦截模型 / 分类路由模型 / 通用对话模型>
+usage_scenario: <使用场景描述>
+```
+
 ---
 
 ## Step 3：数据处理
@@ -184,6 +204,12 @@ ls datas/output_<model>/*_peak*.csv               # 峰值窗口数据已存在
 ### Step 3 ✅ 数据处理（YYYY-MM-DD）
 - 最终数据集：<路径>，<行数> 条，峰值 <RPM> RPM
 - 处理方式：情况 A（JSONL）/ 情况 B（CSV+模板）
+```
+
+**model-context.md 追加**：
+```yaml
+business_peak_rpm: <n>
+dataset_path: <最终数据集路径>
 ```
 
 ---
@@ -231,6 +257,12 @@ POST <endpoint_base>/v1/chat/completions
 - 基线延迟：<首次响应>s
 ```
 
+**model-context.md 追加**：
+```yaml
+endpoint_url: <URL>
+baseline_latency_s: <首次响应秒数>
+```
+
 ---
 
 ## Step 5：Benchmark 执行
@@ -266,6 +298,13 @@ ls logs/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
 - 日志目录：logs/<model>_*_qps_*_all/
 ```
 
+**model-context.md 追加**（回放完成后）：
+```yaml
+replay_success_rate: <n>
+replay_ttft_p90_s: <x>
+replay_e2e_p90_s: <x>
+```
+
 ---
 
 ## Step 6：结果分析 & 报告归档
@@ -291,6 +330,37 @@ ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
   TTFT P90：<x>s / TTFS P90：<x>s
 ```
 
+**model-context.md 追加**：
+```yaml
+sla_max_qps: <x>
+sla_threshold: "<模型特定 SLA 门限描述，如 E2E P95 ≤ 400ms>"
+inflection_type: <软拐点 / 硬拐点，及触发指标说明>
+```
+
+---
+
+## Step 7：生成评估报告
+
+**前置检查（跳过条件）**：
+```bash
+# 报告已存在且 Step 6 未更新
+ls results/models/<model-name>/EVAL_REPORT.md
+```
+
+**调用**：`model-eval-report` Skill
+- 传入：model-name（用于定位 model-context.md 和实验报告目录）
+- Skill 自动完成：读取 model-context.md → 扫描实验 REPORT.md → 计算资源建议 → 写 EVAL_REPORT.md
+
+**产物验证**：`results/models/<model-name>/EVAL_REPORT.md` 存在，摘要层字段完整
+
+**progress.md 写入**：
+```markdown
+### Step 7 ✅ 生成评估报告（YYYY-MM-DD）
+- 报告路径：results/models/<model-name>/EVAL_REPORT.md
+- 上线建议：✅ 可上线 / ⚠️ 有条件 / ❌ 暂不建议
+- 推荐规模：<N> 实例 × <M> 张 GPU
+```
+
 ---
 
 ## 完成标准
@@ -299,8 +369,9 @@ ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
 
 ```
 【评估完成 ✅】<model-name>
-  报告：results/<model>_<date>/REPORT.md
-  结论：拐点 QPS <x> req/s，峰值回放成功率 <n>%，可上线。
+  评估报告：results/models/<model-name>/EVAL_REPORT.md
+  上线建议：✅ 可上线
+  推荐规模：<N> 实例 × <M> 张 <gpu_type>（共 <GPU总数> 卡）
 ```
 
 并更新 `clingo/docs/README.md` 已跑通模型清单。
@@ -310,7 +381,7 @@ ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
 ## 参考文档
 
 - 完整操作手册：`clingo/docs/workflow/model-onboarding.md`
-- 子 Skill 列表：`clingo/docs/skills/skills-roadmap.md`
+- 子 Skill 列表：`clingo/docs/planning/skills-roadmap.md`
 
 ---
 

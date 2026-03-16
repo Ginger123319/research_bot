@@ -34,22 +34,25 @@ QPS 拐点扫描 & 压力测试
 ```
 clingo/docs/
 ├── README.md                    # 本文件，项目概览 + 文档索引
-├── need-todo-idea.md            # 需求 / 待办 / 想法（规划讨论文档）
+├── planning/
+│   ├── need-todo-idea.md        # 需求 / 待办 / 想法（规划讨论文档）
+│   └── skills-roadmap.md        # Skill 建设路线图（候选清单 + 优先级）
+├── designs/
+│   └── 2026-03-13-llm-deployment-probing-design.md  # llm-deployment-docker + llm-service-probing 设计规格
 ├── workflow/
 │   └── model-onboarding.md      # 新模型接入 SOP（标准操作流程，含 Skill 引用）
-└── skills/
-    ├── skills-roadmap.md         # Skill 建设路线图（候选清单 + 优先级）
+└── skills/                      # 每子目录 = 一个可执行 Skill（SKILL.md）
     ├── traffic-dataset-prep/     # ✅ 数据集构建 Skill
-    ├── llm-deployment-docker/    # ✅ 本地 Docker 部署 Skill（2026-03-13 新增）
-    ├── llm-service-probing/      # ✅ 服务能力探测 Skill（2026-03-13 新增）
+    ├── llm-deployment-docker/    # ✅ 本地 Docker 部署 Skill
+    ├── llm-service-probing/      # ✅ 服务能力探测 Skill
     ├── qps-benchmark-sweep/      # ✅ QPS 扫描 Skill
     ├── qps-sweep-comparison/     # ✅ QPS 多组对比分析 Skill
     ├── llm-replay-benchmark/     # ✅ 流量回放 Skill
     ├── benchmark-result-analysis/# ✅ 结果分析 Skill
-    └── model-evaluation-workflow/# ✅ 顶层流程编排 Skill（2026-03-13 新增）
+    └── model-evaluation-workflow/# ✅ 顶层流程编排 Skill
 ```
 
-> 待建：`workflow/reporting-template.md`、`models/` 模型档案目录（见 need-todo-idea.md）
+> 待建：`workflow/reporting-template.md`、`models/` 模型档案目录（见 planning/need-todo-idea.md）
 
 ---
 
@@ -81,6 +84,7 @@ clingo/docs/
 
 ## 快速导航
 
-- 规划讨论 → [`need-todo-idea.md`](need-todo-idea.md)
+- 规划讨论 → [`planning/need-todo-idea.md`](planning/need-todo-idea.md)
+- Skill 建设路线图 → [`planning/skills-roadmap.md`](planning/skills-roadmap.md)
 - 新模型接入流程 → [`workflow/model-onboarding.md`](workflow/model-onboarding.md)
-- Skill 建设路线图 → [`skills/skills-roadmap.md`](skills/skills-roadmap.md)
+- 设计规格文档 → [`designs/`](designs/)

@@ -83,15 +83,17 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 ### Step 5 — 填写 REPORT.md
 
-将终端打印的骨架复制到 `results/<report_dir>/REPORT.md`，按提示填写以下人工段落：
+将终端打印的骨架复制到 `results/<report_dir>/REPORT.md`，**对照 `clingo/docs/workflow/reporting-template.md` 中的模板 A（回放压测报告）逐节填写**：
 
 - **§一 背景与目的**：迁移/上线背景、测试目标
 - **§二 2.1 数据构建流程**：参考 traffic-dataset-prep Skill 描述
 - **§三 3.2 延迟分位数**：**骨架已预填 P50/P90/P95/P99 真实数值，直接复制即可，无需手动读图**
-- **§四 有效性论证**：数据真实性、流量充分性、与 Grafana 比对
-- **§五 结论与上线建议**：业务判断
+- **§四 有效性论证**：数据真实性（3 段固定结构）、流量充分性、与 Grafana 比对
+- **§五 结论与上线建议**：业务判断，SLA 达标表必须含判断标准列
 
 > ⚠️ **延迟表填写规范**：REPORT.md 的延迟分布表必须包含具体数值（`offline_analysis.py` 已自动生成），**不允许留 `<见图>` 占位符**——`<见图>` 会导致 `model-context.md` 和 `EVAL_REPORT.md` 无法自动读取 P90 数据。
+>
+> 📋 **完整写作规范**：`clingo/docs/workflow/reporting-template.md`（含模板A回放报告 + 模板B QPS拐点报告 + 通用必填字段规则）
 
 ---
 

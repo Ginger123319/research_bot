@@ -2644,3 +2644,82 @@ nohup python3 scripts/serve.py 8765  --bind 0.0.0.0 --directory logs    &>/tmp/s
 | 会话文件统一编号命名 | ✅ 完成（01-24 顺序） |
 | Git Commit | ✅ 完成（`86a62fc`） |
 | scripts/export_sessions.py 提交 | ⏳ 待 commit（用户决定是否保留） |
+
+---
+
+## 🗓️ 2026-03-17 会话记录（资产管理重构 + T3 报告模板）
+
+### ✅ 我们实现了哪些功能？
+
+#### 🏗️ 1. 资产管理 Phase 1 设计与执行（brainstorming → 设计文档 → 执行）
+
+通过 brainstorming 流程澄清了三个困惑（目录结构乱、EVAL_REPORT.md 机制未闭合、openclaw 接管），形成设计方案并执行：
+
+**设计文档**（`clingo/docs/designs/2026-03-17-asset-management-design.md`）：
+- 三方案对比（文件系统+INDEX / HTTP API / 静态Dashboard），选择 Phase 1 最小改动路线
+- 明确 model-card = EVAL_REPORT.md，INDEX.yaml 为 openclaw 唯一入口
+- Phase 2（HTTP API）有意推迟
+
+**执行内容（Phase 1）**：
+
+| 变更 | 说明 |
+|------|------|
+| `logs/data-pipeline/` 新建 | 迁入 2 个 process/协调 log 文件，与 benchmark 运行目录分离 |
+| `datas/README.md` 新建 | 5 个源文件迁移状态表，标注目标路径 |
+| `results/models/INDEX.yaml` 新建 | openclaw 接管入口：tianji ✅ 完整条目 + guoxue ⏳ 占位条目 |
+| `results/README.md` 更新 | INDEX.yaml 置顶快速导航 |
+| `run_guoxue_8tp_qps_sweep.sh` 更新 | nohup 路径规范改为 `logs/data-pipeline/` |
+| `model-evaluation-workflow` Skill 更新 | Step 5 data-pipeline 路径 + Step 7 写 INDEX.yaml 操作说明 |
+| `qps-benchmark-sweep` Skill 更新 | 新增"多段扫描合并流程"章节 + data-pipeline 路径 |
+
+**Git 提交**：`80434ef`（设计文档）、`cfda6da`（脚本+Skill）、`944d5c7`（设计文档状态更新）
+
+#### 📋 2. T3 reporting-template.md（`clingo/docs/workflow/reporting-template.md`）
+
+基于 ziwei/hepan/tianji 三份完整 REPORT.md 抽象通用模板：
+- **模板 A**：回放压测报告（6节结构，P90/P95/P99 全部必填，有效性论证标准化三段结构）
+- **模板 B**：QPS 拐点/对比报告（逐档 SLA 表 + 拐点分析 + 扩容计算公式）
+- **通用规范**：禁止"见图"占位、数字格式标准、三层层级关系（REPORT → model-context → EVAL_REPORT）
+
+**Git 提交**：`f76b711`
+
+#### 📝 3. 文档维护（四项收尾）
+
+| 文件 | 变更 |
+|------|------|
+| `need-todo-idea.md` | T3 标记 ✅；I1 关闭（合并入 EVAL_REPORT.md）；I2 剩余部分归入 Phase 2 |
+| `skills-roadmap.md` | model-eval-report 从 ⬜ 改为 ✅；时间线补充 qps-benchmark-sweep 和 model-evaluation-workflow 今日更新 |
+| `benchmark-result-analysis` Skill | Step 5 补入 reporting-template.md 引用和模板A/B说明 |
+| `progress.md` | 本条记录 |
+
+---
+
+### 🐛 我们遇到了哪些错误？
+
+| 错误 | 描述 | 解决 |
+|------|------|------|
+| git add `datas/` `logs/` `results/` 被 .gitignore 拒绝 | 这三个目录是运行时产物目录，已在 .gitignore 中 | 仅提交 `clingo/docs/` 和 `scripts/` 下的变更；文件系统变更（data-pipeline/、INDEX.yaml 等）在本地生效但不入库 |
+| Spec 评审第一轮发现 5 处问题 | 文件名不一致、清单漏项、语义歧义等 | 逐一修复后第二轮评审通过 |
+| Spec 评审第二轮发现 2 处问题 | hepan JSONL 文件存在性误判（评审 subagent 误报）、guoxue linked_experiments 漏掉 partial 目录 | 确认 hepan 文件确实存在；补充 `results/guoxue_partial_20260317` |
+
+---
+
+### 🔧 我们是如何解决这些错误的？
+
+1. **.gitignore 限制**：Phase 1 的文件系统操作（`logs/data-pipeline/`、`datas/README.md`、`results/models/INDEX.yaml`）直接在本地执行，不需要 git 追踪；脚本和 Skill 变更正常入库。
+2. **Spec 评审多轮迭代**：设计文档经过 4 轮 spec 评审才通过，每轮修复具体问题，保证执行清单的可执行性。
+3. **subagent 误报处理**：第三轮评审中 subagent 误判 hepan 文件不存在，通过 shell 实际确认后忽略误报，只修复真实问题（guoxue linked_experiments）。
+
+---
+
+### 📋 当前状态（2026-03-17 会话结束）
+
+| 事项 | 状态 |
+|------|------|
+| 资产管理 Phase 1 | ✅ 完成（7/8 条，第 8 条等 guoxue Sweep 完成） |
+| T3 reporting-template.md | ✅ 完成 |
+| 文档维护（need-todo-idea / skills-roadmap / benchmark Skill / progress） | ✅ 完成 |
+| guoxue Step 6（结果分析） | ⏳ 等 Sweep 完成（~18:00）|
+| guoxue Step 7（EVAL_REPORT.md） | ⏳ 等 Step 6 完成 |
+| guoxue `business_peak_rpm` | ⏳ 等用户提供 Grafana QPM 截图 |
+| Phase 2（HTTP API / Dashboard） | 📌 有意推迟，Phase 2 |

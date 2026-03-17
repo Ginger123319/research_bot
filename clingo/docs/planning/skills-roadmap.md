@@ -170,7 +170,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ---
 
-### ⬜ `model-eval-report`（P2，待验证）
+### ✅ `model-eval-report`（P2，已验证）
 
 **类型**：Technique + Pattern
 **触发条件**：全流程评估完成（Step 6 归档后），生成面向交付的综合评估报告
@@ -185,7 +185,7 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 **与 model-evaluation-workflow 的关系**：Step 0~6 每步增量写入 `model-context.md`，Step 7 调用本 Skill 读取汇总
 **设计文档**：`clingo/docs/designs/2026-03-16-model-eval-report-design.md`
-**验证状态**：⬜ 待用 tianji-querysafety-4b-v2-3 实测（产物最完整）
+**验证状态**：✅ 已用 tianji-querysafety-4b-v2-3 实测验证（2026-03-16，EVAL_REPORT.md 产物完整）
 
 ---
 
@@ -219,13 +219,13 @@ clingo/docs/skills/          ← 真实存储（项目文档）
 
 ```
 ✅ 完成:  traffic-dataset-prep（ziwei-32b / hepan-72b 两模型验证，REFACTOR 完毕）
-✅ 完成:  qps-benchmark-sweep（ziwei/tianji 实测验证）
+✅ 完成:  qps-benchmark-sweep（ziwei/tianji 实测验证；2026-03-17 新增多段合并流程文档）
 ✅ 完成:  qps-sweep-comparison（多组 QPS 结果对比可视化 + SLA 评估，multi_exp_compare.py）
 ✅ 完成:  benchmark-result-analysis（offline_analysis.py + PNG 导出 + REPORT 骨架）
 ✅ 完成:  llm-replay-benchmark（ziwei-32b poisson_100 + tianji-querysafety-4b peak30min 两模型验证，2026-03-12）
 ✅ 完成:  llm-deployment-docker（tianji-querysafety-4b-v2-3 实测验证，DP=4 PCIe，2026-03-13）
 ✅ 完成:  llm-service-probing（tianji-querysafety-4b-v2-3 安全拦截判型验证，REFACTOR 完毕，2026-03-13）
-✅ 完成:  model-evaluation-workflow（9步 Pattern，两阶段+人工断点+Step 7 报告生成，2026-03-13/16）
+✅ 完成:  model-evaluation-workflow（9步 Pattern，两阶段+人工断点+Step 7 报告生成；2026-03-17 新增 Step 5 data-pipeline 路径 + Step 7 INDEX.yaml 写入规范）
 ✅ 完成:  model-eval-report（两层交付报告，model-context.md 增量输入，资源建议计算，tianji-querysafety-4b-v2-3 实测验证，2026-03-16）
 ```
 

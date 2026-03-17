@@ -73,8 +73,7 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 
 - [x] **T2** 创建 `clingo/docs/workflow/model-onboarding.md` ✅ 已完成（ziwei 全流程 6步 SOP）
 
-- [ ] **T3** 创建 `clingo/docs/workflow/reporting-template.md`
-  - 基于多模型 REPORT.md 抽象通用模板（ziwei/hepan/tianji 均已有完整报告可参考）
+- [x] **T3** 创建 `clingo/docs/workflow/reporting-template.md` ✅ 已完成（2026-03-17，含模板A回放压测 + 模板B QPS拐点，三层报告层级说明）
 
 ### 后续按流程推进
 
@@ -92,19 +91,13 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 
 ## 三、IDEA（已筛选，去掉无用项）
 
-### I1. model-card 模型档案（值得做）
+### I1. model-card 模型档案 ✅ 已关闭（2026-03-17，合并入 EVAL_REPORT.md）
 
-为每个迁移模型维护一张"技术说明书"：
+~~为每个迁移模型维护一张"技术说明书"~~ → **已被 `EVAL_REPORT.md` 覆盖**。
 
-| 字段 | 内容 |
-|------|------|
-| 模型名称 / 版本 | - |
-| 部署配置 | GPU 数量、TP/DP、端口、镜像 |
-| 行为特征 | 探针测试总结（输出风格、响应时间、边界行为）|
-| 压测结论 | 最大承载 QPS、TTFT P90 基线 |
-| 已知问题 | 注意事项、坑点 |
+`results/models/{model}/EVAL_REPORT.md` 已包含所有 model-card 字段（部署配置、行为特征、压测结论、已知问题），不再单独建 `clingo/docs/models/<model-name>.md`。
 
-与 `project_status.md` 无关（后者是 AI 会话工作记录）。放在 `clingo/docs/models/<model-name>.md`。
+索引入口改为 `results/models/INDEX.yaml`（2026-03-17 新增），openclaw 通过此文件快速定位所有模型。
 
 ---
 
@@ -114,7 +107,7 @@ llm-benchmark analysis 工具生成 HTML 可视化报告
 
 单实验 HTML 已由 `offline_analysis.py` 覆盖（benchmark-result-analysis Skill），并通过 `llm-replay-benchmark` Skill 串联完整回放→分析→报告闭环（ziwei-32b、hepan-72b、tianji-querysafety-4b 三个模型验证）。
 
-剩余部分（T6 结构化数据导出、跨模型汇总 Dashboard）仍待建设。
+剩余部分（跨模型汇总 Dashboard）已纳入 **Phase 2**（见 `clingo/docs/designs/2026-03-17-asset-management-design.md` §八），与 openclaw HTTP API 一并推迟建设。T6 结构化数据导出已通过 `offline_analysis.py` P90/P95/P99 修改解决（2026-03-16）。
 
 ---
 

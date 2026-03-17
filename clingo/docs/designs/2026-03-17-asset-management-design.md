@@ -202,11 +202,12 @@ Phase 2（HTTP API）建成后，openclaw 改为调用 `GET /api/models` 接口�
 
 ## 七、Skills 更新
 
-| Skill | 需要更新的内容 |
-|-------|--------------|
-| `model-evaluation-workflow` | Step 5 日志路径改为 `logs/data-pipeline/`；Step 7 完成后写入 `INDEX.yaml` |
-| `benchmark-result-analysis` | 无需改动（results/ 结构不变）|
-| `traffic-dataset-prep` | 无需改动（datas/ 不移文件）|
+| Skill | 需要更新的内容 | 状态 |
+|-------|--------------|------|
+| `model-evaluation-workflow` | Step 5 nohup 路径改为 `logs/data-pipeline/`；Step 7 完成后写 `INDEX.yaml` | ✅ 已完成（`cfda6da`）|
+| `qps-benchmark-sweep` | 新增"多段扫描合并流程"章节；执行命令路径改为 `logs/data-pipeline/` | ✅ 已完成（`cfda6da`）|
+| `benchmark-result-analysis` | 无需改动（results/ 结构不变）| — |
+| `traffic-dataset-prep` | 无需改动（datas/ 不移文件）| — |
 
 ---
 
@@ -221,16 +222,20 @@ Phase 2（HTTP API）建成后，openclaw 改为调用 `GET /api/models` 接口�
 
 ## 九、执行清单（Phase 1）
 
-- [ ] 新建 `logs/data-pipeline/`，迁移以下文件：
-  - `logs/process_guoxue_20260316_162108.log`
-  - `logs/guoxue_qps_20260316_163202.log`
+- [x] 新建 `logs/data-pipeline/`，迁移以下文件：
+  - `logs/process_guoxue_20260316_162108.log` → `logs/data-pipeline/`
+  - `logs/guoxue_qps_20260316_163202.log` → `logs/data-pipeline/`
   - 未来所有 `process_*.log` 默认输出到此目录
-- [ ] 更新 `scripts/benchmark/run_guoxue_8tp_qps_sweep.sh`，将 process/协调 log 输出路径改为 `logs/data-pipeline/`
-- [ ] 更新 `datas/README.md`：为每个源文件（JSONL / CSV）添加一行注释标注迁移目标路径 `/mnt/ai-infra/datasets/used4evaluation/{model}/`
-- [ ] 确认 `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` 已存在（已确认：Step 4 时已创建，无需补建）
-- [ ] 创建 `results/models/INDEX.yaml`（按 §4 规范：tianji 完整条目 + guoxue 占位条目）
-- [ ] 更新 `results/README.md`：在"快速导航"区块补充一行 `- 模型评估索引 → [results/models/INDEX.yaml](models/INDEX.yaml)`
-- [ ] 更新 `model-evaluation-workflow` Skill，两处修改：
-  - **Step 5**：data-pipeline 脚本（数据处理/协调脚本）的 log 输出路径改为 `logs/data-pipeline/`
-  - **Step 7**：完成后更新 `results/models/INDEX.yaml`：将对应模型 `eval_status` 改为 `completed`，填写 `performance`、`recommendation`、`eval_completed_date`、`linked_experiments` 字段
-- [ ] 待 guoxue Sweep 完成后：运行 Step 6（offline_analysis + qps-sweep-comparison）→ Step 7（model-eval-report Skill 生成 EVAL_REPORT.md）→ 更新 INDEX.yaml guoxue 条目
+- [x] 更新 `scripts/benchmark/run_guoxue_8tp_qps_sweep.sh`，将 process/协调 log 输出路径改为 `logs/data-pipeline/`（`cfda6da`）
+- [x] 更新 `datas/README.md`：为每个源文件（JSONL / CSV）添加迁移目标路径 `/mnt/ai-infra/datasets/used4evaluation/{model}/`
+- [x] 确认 `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` 已存在（Step 4 时已创建，无需补建）
+- [x] 创建 `results/models/INDEX.yaml`（按 §4 规范：tianji 完整条目 + guoxue 占位条目）
+- [x] 更新 `results/README.md`：快速导航首行改为 INDEX.yaml 链接，置顶为 openclaw 入口（`cfda6da`）
+- [x] 更新 `model-evaluation-workflow` Skill，两处修改（`cfda6da`）：
+  - **Step 5**：nohup 路径改为 `logs/data-pipeline/`
+  - **Step 7**：完成后更新 `results/models/INDEX.yaml` 对应字段
+- [x] 更新 `qps-benchmark-sweep` Skill：新增"多段扫描合并流程"章节，执行命令路径改为 `logs/data-pipeline/`（`cfda6da`，执行时发现的补充项）
+- [ ] **待 guoxue Sweep 完成后**（预计 2026-03-17 ~18:00）：
+  - 运行 Step 6：`offline_analysis.py` + `qps-sweep-comparison` Skill
+  - 运行 Step 7：`model-eval-report` Skill 生成 `EVAL_REPORT.md`
+  - 更新 `INDEX.yaml` guoxue 条目（`eval_status: completed`，填写 performance / recommendation）

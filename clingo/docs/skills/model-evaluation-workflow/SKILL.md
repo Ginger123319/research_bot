@@ -285,7 +285,8 @@ ls logs/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
 --temperature 0.95 --top-p 0.90 --max-completion-tokens 4096
 ```
 
-> ⚠️ QPS 扫描耗时长（数小时），启动后告知用户预估时间并 `nohup` 后台执行，不阻塞会话。
+> ⚠️ QPS 扫描耗时长（数小时），启动后告知用户预估时间并 `nohup` 后台执行，不阻塞会话。  
+> nohup 重定向路径统一写入 `logs/data-pipeline/`：`nohup bash scripts/benchmark/run_<model>_qps_sweep.sh > logs/data-pipeline/<model>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &`
 
 **progress.md 写入**：
 ```markdown
@@ -353,6 +354,27 @@ ls results/models/<model-name>/EVAL_REPORT.md
 
 **产物验证**：`results/models/<model-name>/EVAL_REPORT.md` 存在，摘要层字段完整
 
+**完成后更新 `results/models/INDEX.yaml`**：
+```yaml
+# 找到对应模型条目，更新以下字段：
+eval_status: completed
+eval_completed_date: "YYYY-MM-DD"
+performance:
+  sla_max_qps_rps: <x>
+  sla_max_qps_rpm: <x>
+  sla_criterion: "<SLA 门限>"
+  replay_success_rate: <n>
+  replay_ttft_p90_s: <x>
+  replay_e2e_p90_s: <x>
+recommendation: "<上线建议一句话>"
+paths:
+  eval_report: results/models/<model-name>/EVAL_REPORT.md
+linked_experiments:
+  # 替换临时 logs/ 占位路径为 results/ 正式实验目录
+  - results/<experiment_dir_1>
+  - results/<experiment_dir_2>
+```
+
 **progress.md 写入**：
 ```markdown
 ### Step 7 ✅ 生成评估报告（YYYY-MM-DD）
@@ -374,7 +396,9 @@ ls results/models/<model-name>/EVAL_REPORT.md
   推荐规模：<N> 实例 × <M> 张 <gpu_type>（共 <GPU总数> 卡）
 ```
 
-并更新 `clingo/docs/README.md` 已跑通模型清单。
+并更新：
+- `clingo/docs/README.md` 已跑通模型清单
+- `results/models/INDEX.yaml` 对应模型条目（eval_status → completed）
 
 ---
 

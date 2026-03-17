@@ -157,15 +157,55 @@ tail -f logs/<exp>.log
 
 ```bash
 # 后台长时间运行（推荐）
-nohup bash scripts/benchmark/run_<model>_qps_sweep.sh > /dev/null 2>&1 &
+# ⚠️ nohup 重定向路径统一写入 logs/data-pipeline/，区别于 benchmark 工具自身产物
+nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
+    > logs/data-pipeline/<model>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 
 # 查看进度
 cat logs/<exp_dir>/progress.txt
-tail -f logs/<exp>.log
+tail -f logs/data-pipeline/<model>_qps_<timestamp>.log
 
 # 分析结果（sweep 完成后）→ 见 qps-sweep-comparison Skill
 analysis --host 0.0.0.0 --port 8050 --exp logs/<exp_dir>
 ```
+
+---
+
+## 多段扫描合并流程
+
+**触发条件**：QPS 范围太宽，分多次运行（如先跑 [4.0, 7.0]，再跑 [7.0, 10.0]）。
+
+**操作步骤**：
+
+```bash
+# 1. 新建合并目录
+mkdir -p logs/<model>_<config>_all/
+
+# 2. 将各段运行的档位子目录复制进去
+cp -r logs/<exp_run1>/qps_*  logs/<model>_<config>_all/
+cp -r logs/<exp_run2>/qps_*  logs/<model>_<config>_all/
+
+# 3. 若有异常档位（如 KV Cache 热身异常），创建 _filtered 版本
+mkdir -p logs/<model>_<config>_all_filtered/
+# 复制时跳过异常档位（如 qps_6.90、qps_7.00）
+for d in logs/<model>_<config>_all/qps_*; do
+    qps=$(basename $d | sed 's/qps_//')
+    if [[ "$qps" != "6.90" && "$qps" != "7.00" ]]; then
+        cp -r "$d" logs/<model>_<config>_all_filtered/
+    fi
+done
+
+# 4. 对合并目录运行分析（→ 见 qps-sweep-comparison Skill）
+analysis --host 0.0.0.0 --port 8050 --exp logs/<model>_<config>_all_filtered/
+```
+
+**命名约定**：
+- 合并目录：`logs/<model>_<config>_all/`（不含时间戳，因为跨多次运行）
+- 剔除异常后：`logs/<model>_<config>_all_filtered/`
+
+**已有案例**：
+- `logs/ziwei_4tp_qps_20260310_all/`、`logs/ziwei_8tp_qps_20260310_all/`（ziwei TP4 vs TP8 合并）
+- `logs/tianji_4tp_qps_merged/`、`logs/tianji_4tp_qps_merged_filtered/`（tianji 低段+高段合并，剔除 KV Cache 异常）
 
 ---
 

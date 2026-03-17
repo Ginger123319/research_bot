@@ -1,7 +1,7 @@
 # Skill 建设路线图
 
 > 本工程专属 Skill 候选清单与优先级规划  
-> 更新：2026-03-13
+> 更新：2026-03-17（全部 Skill 已建设完成）
 
 ---
 
@@ -11,8 +11,8 @@
 clingo/docs/skills/          ← 真实存储（项目文档）
   traffic-dataset-prep/
     SKILL.md
-  llm-deployment-docker/     ← 待建
-  qps-benchmark-sweep/       ← 待建
+  llm-deployment-docker/     ← 已建
+  qps-benchmark-sweep/       ← 已建
   ...
 
 .cursor/skills/              ← Cursor IDE 加载目录（软链接指向上方）

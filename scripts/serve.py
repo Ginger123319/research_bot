@@ -388,9 +388,24 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 
     # ── Dashboard ───────────────────────────────────────────────────────────
 
+    def _get_server_host(self):
+        """Return the IP that the client used to reach this server.
+
+        Uses the socket's local address instead of the Host header so the
+        result is correct even behind a reverse-proxy that rewrites Host to
+        'localhost'.  Falls back to the Host header if the socket call fails.
+        """
+        try:
+            ip = self.connection.getsockname()[0]
+            if ip not in ("0.0.0.0", "::"):
+                return ip
+        except Exception:
+            pass
+        return self.headers.get("Host", "localhost").split(":")[0]
+
     def _exp_link(self, exp_path):
         """Build a clickable URL for a linked_experiments entry."""
-        host = self.headers.get("Host", "localhost").split(":")[0]
+        host = self._get_server_host()
         if exp_path.startswith("results/"):
             rel = exp_path[len("results/"):]
             report_full = os.path.join(self.directory, rel, "REPORT.md")
@@ -438,7 +453,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         if status == "in_progress":
             for exp in (model.get("linked_experiments") or []):
                 if exp.startswith("logs/"):
-                    host = self.headers.get("Host", "localhost").split(":")[0]
+                    host = self._get_server_host()
                     rel = exp[len("logs/"):]
                     actions_html += f'<a class="btn" href="http://{host}:8765/{rel}/progress.txt" target="_blank">查看进度</a>'
                     break
@@ -460,7 +475,10 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
     <span>类型：{model_type}</span>
     <span>部署：{tp}TP × {gpu_type}（共 {gpu_count} 卡）</span>
     <span>拐点：{qps_str}</span>
-    {f'<span style="font-size:12px">{rec}</span>' if rec else ''}
+    {f'<span style="font-size:12px">{rec}</span>' if rec else (
+        '<span style="font-size:12px;color:#57606a">评估进行中，暂无结论</span>'
+        if status == "in_progress" else ""
+    )}
   </div>
   {warn_html}
   <div class="card-actions">{actions_html}</div>
@@ -551,10 +569,10 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
     <a href="javascript:location.reload()">⟳ 刷新</a>
   </div>
   {stats_html}
-  {insights_html}
   <div class="model-grid">
     {cards_html}
   </div>
+  {insights_html}
   <p class="ts-note">数据更新时间：{_html_escape(last_updated)}</p>
 </div>
 </body>

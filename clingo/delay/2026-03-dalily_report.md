@@ -129,7 +129,11 @@ format:
 
 ---
 
-# 📅 2026-03-13 工作日报
+# 📅 2026-03-13 工作日报（摘要见上）
+
+---
+
+# 📅 2026-03-16 工作日报
 
 ## 一、tianji-querysafety 4TP QPS 拐点完整定位
 
@@ -248,3 +252,45 @@ format:
 - 完成 tianji-querysafety 数据处理（281,435 条全量 → 44,099 条峰值数据，修复 `prompt` 列缺失导致的 `KeyError`），启动 QPS 扫描任务（7.0→4.0，30 档，预计 ~23h）。
 
 **结果**：项目文档/脚本/Skill 三套体系初步建立；tianji QPS 扫描正在执行中。
+
+---
+
+# 📅 2026-03-16 工作日报
+
+## 一、文档体系整理与目录重组
+
+**背景**：随着 Skill 数量增多、文档散落在多个层级，`clingo/docs/` 目录结构混乱，规划类文档（need-todo、skills-roadmap）与 Skill 文件混放，不便于维护。
+
+**做了什么**：新建 `clingo/docs/planning/` 目录，将 `need-todo-idea.md` 和 `skills-roadmap.md` 从原来的位置迁移进去；新增 `clingo/docs/designs/` 存放设计文档；同步更新 `model-evaluation-workflow`、`model-onboarding.md`、`benchmark-result-analysis` 等相关文档；新增 `model-eval-report` Skill 及其设计文档。两次变更分别提交（commit `485d088`、`979b4b3`）。
+
+**结果**：目录职责清晰（skills/ 只放 Skill、planning/ 放规划、designs/ 放设计），后续维护更顺畅。
+
+---
+
+## 二、traffic-dataset-prep Skill 补充 DataConverter 陷阱
+
+**背景**：处理 guoxue 数据时发现 DataConverter 产出的 `_all.csv` 是 3 列轻量索引文件（非全量数据），若跳过 DataSampler 直接拿去跑 benchmark 会触发 `KeyError: 'old_response'`，这个陷阱之前的 Skill 中没有记录。
+
+**做了什么**：在情况 A 流程中插入「步骤1.5：合并日期分片 CSV → 覆盖写回 `_all.csv`（6 列完整数据）」，明确说明 DataConverter 原生 `_all.csv` 不含 `messages`/`old_response`；常见报错表补录 `KeyError: 'old_response'` 条目；同步更新 `process_guoxue_full.py` 各步骤的产出文件内联批注和 README 模板。
+
+**结果**：Skill 陷阱说明完整，后续新模型接入可避免踩同一个坑。
+
+---
+
+## 三、guoxue 数据处理 & QPS Sweep 启动
+
+**背景**：`xinghan-guoxue-72b-v1-2-reason` 模型需要做 QPS 拐点评估，数据处理和压测脚本均需要从头准备。
+
+**做了什么**：执行完整数据处理管道（`process_guoxue_full.py`），产出 `_poisson_220_stitched.csv`（5,726 行，峰值 220 RPM）；编写并启动 `run_guoxue_8tp_qps_sweep.sh`（24 档，QPS 0.190→0.350，远端服务 `bazi-guoxue-eagle3-test`）。
+
+**结果**：压测任务已后台启动，第 1/24 档进行中，预计今晚跑完。
+
+---
+
+## 四、历史会话批量导出与整理
+
+**背景**：2026-03-14 前的 30 个 Cursor 对话只有部分做了手动导出，大量会话内容散落在 agent-transcripts JSONL 中，需要统一归档为可读 Markdown。
+
+**做了什么**：编写 `scripts/export_sessions.py`，将 JSONL 自动转换为对齐 Cursor 原生导出风格的 Markdown；识别并跳过 7 个已归档会话（通过用户截图人工比对），成功导出 17 个新文件；将全部 24 个会话文件统一按时间顺序重命名为 `{nn}_cursor_{topic}.md`，提交 commit `86a62fc`（22 文件，10853 行新增）。
+
+**结果**：2026-03-14 前所有会话全部归档入 `clingo/sessions/`，编号连续（01-24），历史可追溯。

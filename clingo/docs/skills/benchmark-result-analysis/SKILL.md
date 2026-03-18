@@ -112,7 +112,7 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 | 指标 | 全称 | 语义 |
 |------|------|------|
 | TTFT | Time To First Token | 首个 token 返回耗时（Prefill 延迟代理）|
-| TTFS | Time To First Sentence | 首句完整返回耗时（= TTFT + 首句 decode 时间）|
+| TTFS | Time To First **Sentence** | 首句完整返回耗时（= TTFT + 首句 decode 时间）|
 | ITL | Inter-Token Latency | per-token 间隔时间（`tpot` 字段），555K+ 条/次实验 |
 | User-TPOT | User-perceived TPOT | 每请求平均 TPOT = `(end−first_token) / completion_tokens` |
 | E2E | End-to-End latency | 从发送到最后一个 token 的总时间 |
@@ -120,6 +120,62 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 > **ITL vs User-TPOT 区别：**
 > - ITL：token 粒度，能看单次 decode step 抖动（P99 通常比均值高很多）
 > - User-TPOT：请求粒度，均值平滑后结果，用于整体 SLA 评估
+
+### ⚠️ TTFS 常见误解（必读）
+
+| 误解 | 正确理解 |
+|------|---------|
+| TTFS = "Time to First Stream"（首字节） | ❌ 错误：TTFS = "Time to First **Sentence**"（首句） |
+| TTFS ≈ TTFT（值相近或相等） | ❌ 错误：TTFS > TTFT，差值为首句 decode 时间（通常 0.x～数秒）|
+| 直接从 CSV 列读取 TTFS | ❌ 错误：原始 CSV **没有** `ttfs` 列，必须通过 `analysis_response()` 解析 `token_list` 计算 |
+| 任何中间件/ad-hoc 脚本计算 TTFS | ⚠️ 风险：需确认其通过 `token_list` 找到中文标点（`。！？，：`）来定位首句边界 |
+
+**如果看到对比报告中 TTFS 数值 = TTFT 数值，说明 TTFS 计算有误，需要重新通过标准脚本生成。**
+
+---
+
+## 多 CSV 横向对比（新场景）
+
+当需要对比多个版本/配置的 benchmark 结果时，**必须使用 `compare_analysis.py`**，不能直接读 CSV 列做对比。
+
+### 使用场景
+- 不同 SGLang 版本对比（如 0.4.6 vs 0.5.5）
+- 不同 TP/DP 配置对比
+- 不同 benchmark 参数对比
+
+### 命令
+
+```bash
+cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
+
+# 两个 CSV 对比
+.venv/bin/python scripts/analysis/compare_analysis.py \
+  --csv logs/exp_a/result_a.csv logs/exp_b/result_b.csv \
+  --names "版本A" "版本B" \
+  --out results/compare_20260318/compare_report.md \
+  --html results/compare_20260318/compare_report.html
+
+# 三个 CSV 对比（以第 0 个为基准）
+.venv/bin/python scripts/analysis/compare_analysis.py \
+  --csv logs/a.csv logs/b.csv logs/c.csv \
+  --names "0.4.6-r08" "0.4.6+2params-r08" "0.5.5-r08" \
+  --base 0 \
+  --out results/compare_report.md
+```
+
+### 输出
+
+脚本终端打印并生成 Markdown 报告，包含：
+- 成功率 / QPS / 总耗时
+- TTFT / TTFS / E2E 的 Mean + P50/P90/P95/P99（正确计算）
+- 各指标相对基准的变化百分比
+- 可选 HTML CDF 叠加对比图
+
+> ⚠️ **为什么不能直接读 CSV 列？**
+> 原始 CSV 只有 `token_list`（原始 JSON），没有预计算的 `ttft`/`ttfs` 列。
+> `compare_analysis.py` 内部调用 `analysis_response()` → `analysis_row()` 来：
+> - 从 `token_list[0]["timestamp"]` 和 `token_list[1]["timestamp"]` 计算 TTFT
+> - 扫描 `token_list` 中第一个含 `。！？，：` 的 token 计算 TTFS
 
 ---
 
@@ -130,6 +186,8 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 | `load_exp_csv` 返回 error | CSV 格式不符合 benchmark 工具输出规范 | 检查 CSV 是否来自 `benchmark` 命令的 output-dir |
 | PNG 中文标题显示为方块 | 系统无 CJK 字体 | 已改为全英文标签，无需处理 |
 | 骨架中仍出现 `<见图>` | `offline_analysis.py` 版本过旧，未包含分位数计算 | 确认使用最新版脚本（2026-03-16 后），P50/P90/P95/P99 已自动填入 |
+| TTFS = TTFT（对比报告数值相同） | 使用了 ad-hoc 脚本直接读 CSV，未通过 `analysis_response()` 计算 | 改用 `compare_analysis.py` 重新运行 |
+| TTFS 被标注为 "Time to First Stream" | 模型误解了缩写含义 | TTFS = Time to First **Sentence**（首句），提醒 AI 重新计算 |
 
 ---
 
@@ -144,3 +202,42 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 ```
 
 完成后补充 REPORT.md 中的背景和论证段落，添加 Grafana 截图，即完成完整的迁移验证报告。
+
+---
+
+## 分析完成后的归档动作（强制）
+
+每次分析完成后，**必须**执行以下归档动作：
+
+### 1. 更新实验目录 README.md 结果指针
+
+在 `logs/<exp_dir>/README.md` 的"快速结论"区补填真实数值：
+
+```markdown
+## 快速结论
+- 成功率：<N>%（从 REPORT.md 填入）
+- TTFT P90：<x>s
+- E2E P90：<x>s
+
+## 结果指针
+- 分析报告 → results/<report_dir>/REPORT.md  ← 填入真实路径
+```
+
+### 2. 更新 `results/README.md`
+
+在 `results/README.md` 的目录总览表中补充本次实验条目：
+
+```markdown
+| [<report_dir>](#<report_dir>) | <model> | 回放压测 | ✅ 成功率 <N>%，TTFT P90 <x>s | YYYY-MM-DD |
+```
+
+并在详细说明节追加对应的完整描述段落。
+
+### 3. model-context.md 追加
+
+```yaml
+replay_success_rate: <N>
+replay_ttft_p90_s: <x>
+replay_ttfs_p90_s: <x>
+replay_e2e_p90_s: <x>
+```

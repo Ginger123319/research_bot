@@ -31,7 +31,7 @@ digraph data_prep {
 ```
 JSONL → [步骤1] DataConverter → 日期分片 CSV（_2026-MM-DD.csv）+ _all.csv（3列索引，不可用）
                                       ↓
-                     [步骤1.5] 合并日期分片 → 覆盖写回 _all.csv（6列完整数据）  ← ⚠️ 必须执行
+                     [步骤1.5] 合并日期分片 → 覆盖写回 _all.csv（6列完整数据）  ← 条件执行（见下）
                                       ↓
                         [步骤2] DataSampler → _selected_*.csv（峰值窗口）
                                       ↓
@@ -44,10 +44,20 @@ JSONL → [步骤1] DataConverter → 日期分片 CSV（_2026-MM-DD.csv）+ _al
                         [步骤6] README.md → 输出目录说明文档
 ```
 
+> **步骤1.5 执行条件**：
+>
+> | 场景 | 是否需要步骤1.5 |
+> |------|----------------|
+> | 需要把 `_all.csv` 直接传给 benchmark 工具（全量数据压测）| **必须执行** |
+> | 只走 DataSampler 采样管道（步骤2），不需要 `_all.csv` 全量数据 | **可跳过**（DataSampler 直接读日期分片 CSV，不依赖 `_all.csv` 内容）|
+>
+> **判断方法**：若下一步是 `DataSampler._select_data(start_dt, end_dt)` 峰值采样，可跳过步骤1.5；
+> 若下一步是直接把 `_all.csv` 传给 benchmark，**必须先执行步骤1.5**。
+>
 > **⚠️ DataConverter `_all.csv` 陷阱**：DataConverter 原生输出的 `_all.csv` 是 3 列内部索引文件
 > (`income_time`, `file_suffix`, `original_index`)，**不含 `messages` / `old_response`**。
 > 直接传给 benchmark 工具会触发 `KeyError: 'old_response'`。
-> 必须在步骤1之后执行步骤1.5，将所有日期分片合并覆盖写回为 6 列完整的 `_all.csv`。
+> 需要全量 benchmark 时，必须执行步骤1.5 将日期分片合并覆盖写回为 6 列完整 `_all.csv`。
 
 ### 情况 B：CSV 源数据 + 系统提示模板填充
 
@@ -229,7 +239,7 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 | 步骤 | 检查项 |
 |------|--------|
 | 转换后（步骤1） | 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
-| 合并后（步骤1.5） | `_all.csv` 列变为 6 列（`messages`、`old_response` 存在且非空）；行数与日期分片之和一致 |
+| 合并后（步骤1.5） | **若执行**：`_all.csv` 列变为 6 列（`messages`、`old_response` 存在且非空）；行数与日期分片之和一致。**若跳过（纯采样路径）**：确认下一步为 DataSampler，且全流程中不直接使用 `_all.csv` |
 | 采样后 | 峰值 RPM 是否符合预期；各段起止时间 |
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
 | 插值后 | 峰值 RPM 达到 `TARGET_RPM`；messages 有内容行数 |

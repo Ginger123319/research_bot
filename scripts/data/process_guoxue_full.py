@@ -90,16 +90,54 @@ print(f"✅ DataConverter 完成: {INDEX_FILE.name}  ({INDEX_FILE.stat().st_size
 # DataConverter 输出的 _all.csv 是 3 列索引文件（income_time, file_suffix, original_index），
 # 不含 messages / old_response，benchmark 工具无法直接使用。
 # 此步骤将所有日期分片 CSV 合并排序后覆盖写为标准 6 列 _all.csv。
-print("步骤1.5: 合并日期分片 → 覆盖写回 _all.csv（完整 6 列）")
+#
+# ⚠️  DataConverter 不提取模型历史回复到 old_response，日期分片 CSV 中该列全为 NaN。
+# 此步骤同时从原始 JSONL 按 line_num 回填 old_response（role='a' 的内容）。
+# line_num 与 JSONL 行索引的对应关系：line_num = jsonl_row_index + 1（1-indexed）。
+print("步骤1.5: 合并日期分片 + 从 JSONL 回填 old_response → 覆盖写回 _all.csv")
 day_csvs = sorted(Path(OUTPUT_DIR).glob(f"{MODEL_NAME}_2[0-9][0-9][0-9]-*.csv"))
 if not day_csvs:
     print("  ⚠️  未找到日期分片 CSV，跳过合并")
 else:
+    # ── 1.5a 合并日期分片 ────────────────────────────────────────────────────
     dfs = [pd.read_csv(p) for p in day_csvs]
     df_full = pd.concat(dfs, ignore_index=True).sort_values("income_time").reset_index(drop=True)
-    df_full["old_response"] = df_full["old_response"].fillna("")
+
+    # ── 1.5b 从 JSONL 按 line_num 回填 old_response ──────────────────────────
+    # line_num 为 1-indexed，对应 JSONL 的 (line_num - 1) 行
+    print(f"  从 JSONL 构建 old_response 映射: {Path(JSONL_FILE).name} ...")
+    line_num_to_resp: dict[int, str] = {}
+    with open(JSONL_FILE, encoding="utf-8") as jf:
+        for idx, raw in enumerate(jf):
+            line_num = idx + 1  # 1-indexed
+            try:
+                record = json.loads(raw)
+                resp = next(
+                    (m.get("content", "") for m in record.get("messages", [])
+                     if m.get("role") == "a"),
+                    ""
+                )
+                if resp:
+                    line_num_to_resp[line_num] = resp
+            except json.JSONDecodeError:
+                pass
+    mapped = sum(1 for ln in df_full["line_num"] if ln in line_num_to_resp)
+    print(f"  JSONL 映射条数: {len(line_num_to_resp):,}  命中 CSV 行数: {mapped:,} / {len(df_full):,}")
+
+    df_full["old_response"] = df_full["line_num"].map(line_num_to_resp).fillna("")
+    filled = (df_full["old_response"] != "").sum()
+    print(f"  old_response 有效填充: {filled:,} / {len(df_full):,}  ({filled/len(df_full)*100:.1f}%)")
+
+    # ── 1.5c 同步更新日期分片 CSV（让后续 DataSampler 读到的也有 old_response）────
+    for p in day_csvs:
+        df_day = pd.read_csv(p)
+        df_day["old_response"] = df_day["line_num"].map(line_num_to_resp).fillna("")
+        df_day.to_csv(p, index=False)
+    print(f"  已回填并覆盖写回 {len(day_csvs)} 个日期分片 CSV")
+
     # 产出: {MODEL_NAME}_all.csv
     #   6列完整数据（income_time, prompt, messages, old_response, user_id, line_num）
+    #   old_response 已从 JSONL role='a' 回填，非空率应接近 100%
     #   ⚠️ 覆盖了 DataConverter 原生的 3 列索引文件；此后 _all.csv 可直接用于 benchmark
     df_full.to_csv(INDEX_FILE, index=False)
     print(f"  合并 {len(day_csvs)} 个分片  →  {len(df_full):,} 行  →  {INDEX_FILE.name}")

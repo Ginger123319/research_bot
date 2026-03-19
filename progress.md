@@ -2723,3 +2723,874 @@ nohup python3 scripts/serve.py 8765  --bind 0.0.0.0 --directory logs    &>/tmp/s
 | guoxue Step 7（EVAL_REPORT.md） | ⏳ 等 Step 6 完成 |
 | guoxue `business_peak_rpm` | ⏳ 等用户提供 Grafana QPM 截图 |
 | Phase 2（HTTP API / Dashboard） | 📌 有意推迟，Phase 2 |
+
+---
+
+## 🗓️ 2026-03-17 会话（下午）— Dashboard Phase 1 + 模型文档完善
+
+### ✅ 我们实现了哪些功能？
+
+#### 📊 1. Dashboard Phase 1 全面完成（18 项验收通过）
+
+**核心功能**：
+- `scripts/serve.py` 扩展 Dashboard 和 JSON API（`/api/models`, `/api/models/{name}`）
+- 卡片式布局：4 个模型（3 完成 / 1 进行中），含部署配置、拐点数据、推荐建议、实验列表
+- 统计卡片：总数 / 已完成 / 进行中
+- 数据更新时间戳（INDEX.yaml mtime）
+
+**Phase 1 修复项（全部通过验收）**：
+1. **localhost 链接问题**：用 `socket.getsockname()` 动态获取真实服务器 IP，绕过反向代理 Host 头重写问题
+2. **insights 字段**：INDEX.yaml 添加 3 条技术洞察，Dashboard 底部渲染"💡 关键发现"区块
+3. **in_progress 占位文本**：`recommendation` 为 null 时显示"评估进行中，暂无结论"
+4. **错误处理**：INDEX.yaml 缺失 → 友好错误页；EVAL_REPORT.md 缺失 → 卡片警告
+
+**Git 提交**：`b620298`（Phase 1 实现）、`5449d08`（修复 + 日报）
+
+#### 📁 2. ziwei 和 hepan 模型完整文档（results/ 目录，不入 git）
+
+**xinghan-ziwei-32b-v1**：
+- 创建 `model-context.md`（TP8×8卡 L20，peak 100 RPM，sla_max_qps 1.50）
+- 创建 `EVAL_REPORT.md`，含 TP8 vs TP4 对比：TP8×2=16卡（推荐）；TP4×3=12卡（省 25%，需网关单实例限流）
+
+**xinghan-hepan-72b-v1-2**：
+- 创建 `model-context.md`（TP8×8卡 L20，peak 200 RPM）
+- 创建 `EVAL_REPORT.md`（双 QPS 档：0.80 基准 / 0.90 限流，TTFS P90 ≤ 1.6s，推荐 5 实例 × 8TP = 40 卡 L20）
+- 修复 `hepan_benchmark_20260312/REPORT.md` 中 `<见图>` 占位符（TTFS P50/P90/P99 + ITL P50/P90/P99 全部补入 180 RPM 数值）
+
+#### 📝 3. INDEX.yaml 完善（results/models/）
+
+- 添加 ziwei、hepan 两个 completed 模型条目
+- 修正 guoxue `gpu_type: H100 → L20`
+- 添加顶级 `insights` 字段（3 条跨模型技术洞察）
+- hepan 更新：`business_peak_rpm: 200`，推荐 `5 实例 × 8TP = 40 卡 L20`
+
+---
+
+### 🐛 我们遇到了哪些错误？
+
+| 错误 | 描述 | 解决 |
+|------|------|------|
+| hepan REPORT.md 中 `<见图>` 占位符 | TTFS/ITL 百分位数未填写 | 从 hepan_peak_replay_analysis.html 提取 180 RPM 数值补入 |
+| Dashboard logs 链接指向 localhost | 使用 `Host` header 构建 URL，通过反向代理后 Host 变为 localhost | 改用 `socket.getsockname()[0]` 获取真实 IP |
+| guoxue 模型卡片显示 H100 | INDEX.yaml 中 `gpu_type: H100` 笔误 | 改为 `gpu_type: L20` |
+| in_progress 模型 recommendation 为空白 | `recommendation: null` 时 HTML 模板不渲染任何内容 | 添加状态判断，显示占位文本 |
+| insights 区块位置不对 | "💡 关键发现"在统计卡片下方，应在卡片墙下方 | 调整 HTML 模板中 `{insights_html}` 的位置 |
+
+---
+
+### 📋 当前状态（2026-03-17 下午会话结束）
+
+| 事项 | 状态 |
+|------|------|
+| Dashboard Phase 1 | ✅ 全部完成，18 项验收通过 |
+| ziwei 文档（model-context + EVAL_REPORT + INDEX） | ✅ 完成（含 TP4 vs TP8 成本分析） |
+| hepan 文档（model-context + EVAL_REPORT + INDEX） | ✅ 完成（含 0.80/0.90 双 QPS 档框架） |
+| guoxue Step 6（结果分析） | ⏳ 等 Sweep 完成 |
+| guoxue Step 7（model-context + EVAL_REPORT + INDEX） | ⏳ 等 Step 6 完成 |
+| guoxue `business_peak_rpm` | ⏳ 等用户提供 Grafana QPM 截图 |
+
+---
+
+## 🗓️ 2026-03-17 会话（傍晚）— guoxue Step 6/7 + 文档修正
+
+### ✅ 我们实现了哪些功能？
+
+#### 📊 1. guoxue QPS Sweep 分析（24 档全部完成）
+
+**数据确认**：
+- QPS Sweep 24 档全部完成（2026-03-16 16:32 启动 → 2026-03-17 18:26 结束，共 ~25 小时）
+- 用 `multi_exp_compare.py` 一次性分析全部 24 个 CSV（并行处理，约 2.7 分钟）
+
+**SLA 分析结果（全量 24 档）**：
+
+| 区间 | QPS | E2E P90 | TTFS P90 | 成功率 |
+|------|-----|---------|---------|--------|
+| 稳态区 | 0.190~0.245 req/s | 132~136s | ~0.79s | 100% |
+| **拐点** | **0.245→0.255** | **134→155s (+15.9%)** | 0.788→0.849s | 100% |
+| 过载区 | 0.255~0.350 | 155~180s（**平稳**） | ~0.85s | ≥99.9% |
+
+**独特发现**：E2E 软拐点（非崩溃，成功率始终≥99.9%）；TTFS 全程 ≤ 0.86s 远低于 1.5s SLA；主要瓶颈是 4K token 输出的排队延迟（E2E），而非 Prefill（TTFS）。
+
+**Grafana 截图分析**（两张图）：
+- 裸模型监控：`xinghan-guoxue-72b-v1-2-reason(total) = 43 RPM`（1分钟绝对峰值）
+- MCP 服务监控：`八字深度(total) = 213 RPM`（上游 MCP 聚合流量，不等于模型调用量）
+- 确认 `business_peak_rpm: 43`
+
+#### 📁 2. guoxue Step 6/7 完整文档创建
+
+| 文件 | 内容 |
+|------|------|
+| `results/guoxue_qps_sweep_20260317/REPORT.md` | 24 档完整 SLA 明细表 + 拐点分析 + 资源计算 + 有效性论证 |
+| `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` | 更新 Step 5/6 结论（business_peak_rpm=43, sla_max_qps=0.245, 拐点特征）|
+| `results/models/xinghan-guoxue-72b-v1-2-reason/EVAL_REPORT.md` | 综合评估报告（含"回放缺失"明确警告）|
+| `results/models/INDEX.yaml` | guoxue 从 `in_progress` → `completed`，performance 字段填写完整 |
+
+**所有 5 个模型均为 completed，Dashboard 从「3 完成 / 1 进行中」→「5 完成 / 0 进行中」**。
+
+#### 🔧 3. 两处文档/配置修正
+
+**修正 1：guoxue 上线结论措辞**
+- 用户指出：无回放测试时不应直接说"✅ 可上线"
+- 修改 INDEX.yaml `recommendation` 为：`⚠️ QPS 评估完成（拐点 0.245 req/s），回放测试缺失，上线结论待补充`
+- EVAL_REPORT.md 同步增加"⚠️ 说明：本次评估缺少回放测试数据"明确标注
+
+**修正 2：lingyu 实验链接端口**
+- 根因：`linked_experiments: logs/lingyu_qps_sweep_20260317`（以 `logs/` 开头）→ serve.py 路由到 8765 端口
+- 修复：改为 `results/lingyu_qps_sweep_20260317`（以 `results/` 开头）→ 走 18999 端口
+- 验证：所有 5 个模型的 linked_experiments 全部使用 18999 端口
+
+---
+
+### 🐛 我们遇到了哪些错误？
+
+| 错误 | 描述 | 发现时机 |
+|------|------|---------|
+| CSV `field_size_limit` 超限 | `token_list` 字段超默认 131072，读取报错 | 提取 QPS 各档指标时 |
+| guoxue recommendation 过于乐观 | 没有回放数据就写了"✅ 可上线" | 用户验收时指出 |
+| lingyu 实验链接走 8765 端口 | `linked_experiments` 路径以 `logs/` 开头，被 serve.py 路由到日志服务端口 | 用户验收 Dashboard 时发现 |
+
+---
+
+### 🔧 我们是如何解决这些错误的？
+
+1. **CSV 读取限制**：`csv.field_size_limit(10**7)` 临时扩大，仅用于提取列名，后续分析改用 `multi_exp_compare.py`（内部已处理）
+2. **上线结论措辞**：将 INDEX.yaml + EVAL_REPORT.md 中的 recommendation 改为 `⚠️` 警告级别，明确说明"回放测试缺失，上线结论待补充"
+3. **lingyu 端口问题**：将 `logs/` 路径改为 `results/lingyu_qps_sweep_20260317`，与其他模型保持一致
+
+---
+
+### 📋 当前状态（2026-03-17 傍晚会话结束）
+
+| 事项 | 状态 |
+|------|------|
+| Dashboard Phase 1（18 项验收）| ✅ 全部通过（commit `5449d08`）|
+| guoxue QPS Sweep 分析（24 档）| ✅ 完成（SLA 最大 0.245 req/s，E2E 软拐点）|
+| guoxue REPORT.md | ✅ 完成（`results/guoxue_qps_sweep_20260317/REPORT.md`）|
+| guoxue model-context.md 更新 | ✅ 完成（business_peak_rpm=43, sla_max_qps=0.245）|
+| guoxue EVAL_REPORT.md | ✅ 完成（含回放缺失明确警告）|
+| guoxue INDEX.yaml 注册 | ✅ 完成（状态 completed，5/5 模型全部 completed）|
+| guoxue 上线结论 | ⚠️ 待补充（无回放数据，暂不给上线结论）|
+| lingyu 实验链接端口修复 | ✅ 完成（logs/ → results/）|
+| guoxue 回放测试 | ⏳ 待机器资源（当前跳过）|
+
+---
+
+## 🗓️ 2026-03-17 会话记录（lingyu 模型资产完善）
+
+### 📌 会话目标
+补全同事新建的 `lingyu-235b-A22b-v9-2` 模型记录——完善 `model-context.md`、将其注册到 `INDEX.yaml`、迁移实验数据、生成 `EVAL_REPORT.md`，并修复 Dashboard 显示的两个问题。
+
+---
+
+### ✅ 我们实现了哪些功能？
+
+#### 1. 信息收集与问题诊断
+- 读取 `results/models/lingyu/model-context.md`，识别 7 处 `null` 字段（gpu_type、dp_size、business_peak_rpm、endpoint_url 错误等）
+- 确认 `INDEX.yaml` 完全缺失 lingyu 条目
+- 用户提供补充信息：H20 GPU、TP8/DP1、业务峰值 800 RPM、当前 7 实例（3+4）、计划 10 实例、正确 endpoint URL（`infra-lingyu-p235b-a22b-v9`，原为 v11 测试端点）
+
+#### 2. 原始 CSV 数据迁移（60 个文件）
+- 源路径：`/mnt/ai-infra/users/shared/llm-benchmark-web/llm-benchmark-web-data/workspaces/jyf/results/lingyu_*.csv`
+- 目标路径：`logs/lingyu_qps_sweep_20260317/`（新建目录）
+- 分两类：`lingyu_rps_test_params_*`（主 QPS Sweep，21 档 1.0~3.0 req/s）、`lingyu_transfer_test_*`（多实例吞吐测试）
+
+#### 3. `model-context.md` 完全补全
+| 字段 | 填入内容 |
+|------|----------|
+| `gpu_type` | H20 (96GB) |
+| `dp_size` | 1 |
+| `business_peak_rpm` | 800 |
+| `endpoint_url` | 修正为 `infra-lingyu-p235b-a22b-v9` |
+| `current_instances` / `planned_instances` | 7 / 10 |
+| `recommended_instances` | 7（800 RPM ÷ 120 RPM/实例） |
+| `qps_sweep_data_path` | `logs/lingyu_qps_sweep_20260317`（替换原死路径） |
+| `inflection_type` | 修正为实测：E2E P90 拐点（TTFT 极平稳，+12.5%） |
+
+#### 4. `INDEX.yaml` 新增 lingyu 完整条目
+- `eval_status: completed`，`eval_completed_date: 2026-03-17`
+- 包含 deployment、performance、recommendation、paths、linked_experiments 所有字段
+
+#### 5. 从原始 CSV 计算真实 TTFT/E2E P90 指标（21 档）
+- 解析 `token_list` 字段，以 `[START]` 时间戳为基准（`income_time` 是数据集原始时间，非请求发送时间）
+- 计算结果：TTFT P90 全程 0.343~0.386s（极稳定），E2E P90 从 2.9s 增长到 11.3s（拐点明显）
+
+#### 6. 创建 `EVAL_REPORT.md`
+- 路径：`results/models/lingyu/EVAL_REPORT.md`
+- 内容：摘要表（上线建议、容量计算）、部署配置、数据背景、回放测试跳过说明（H20 限制）、21 档完整 SLA 明细表、实验数据索引
+
+#### 7. 修复 Dashboard 两个问题
+- **⚠️ EVAL_REPORT.md 不存在**：创建文件后消除警告，"查看报告"按钮可用
+- **重复链接条目**：`INDEX.yaml` 中移除未生成的 `results/lingyu_qps_sweep_20260317`，只保留 `logs/lingyu_qps_sweep_20260317` 一条
+
+---
+
+### 🐛 遇到的错误
+
+| 错误 | 描述 |
+|------|------|
+| `income_time` 基准错误 | 首次计算 TTFT 时用 `income_time`（数据集原始时间，比请求发送时间早约 40 小时），结果为 145491s 这样荒谬的数值 |
+| CSV 字段过大 | `token_list` 字段超过 `csv.field_size_limit(131072)`，读取报错 |
+| `lingyu_rps_test` 文件名拼写 | 路径里有 `llingyu`（双 l）的笔误，实际文件名为 `lingyu`（单 l） |
+| `results/lingyu_qps_sweep_20260317` 路径不存在 | `model-context.md` 的 `qps_sweep_report_path` 指向该死路径，导致 Dashboard 显示重复链接 |
+
+---
+
+### 🔧 如何解决这些错误
+
+| 错误 | 解决方式 |
+|------|---------|
+| `income_time` 基准错误 | 分析 `token_list` 结构，发现 `[START]` 即为请求发送时间戳，改为 `TTFT = tl[1].timestamp - tl[0].timestamp` |
+| CSV 字段过大 | `csv.field_size_limit(10**8)` 扩大上限 |
+| 文件名拼写 | 用 `ls | grep -i lingyu` 确认实际文件名，发现无双 l |
+| 死路径 | `model-context.md` 中用 `qps_sweep_data_path` 替换原字段，直接指向 logs 数据目录；INDEX.yaml 移除未生成的 results 条目 |
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `logs/lingyu_qps_sweep_20260317/` | ✨ 新建 | 60 个 CSV 文件从 jyf 工作区迁移（QPS Sweep 原始数据 + 多实例吞吐测试）|
+| `results/models/lingyu/model-context.md` | 📝 完全补全 | 7 处 null 字段全部填入，inflection_type 修正，endpoint URL 修正，qps_sweep_report_path 改为 qps_sweep_data_path |
+| `results/models/lingyu/EVAL_REPORT.md` | ✨ 新建 | 96 行，含摘要表、21 档 SLA 明细（基于原始 CSV 实测数据）、实验索引 |
+| `results/models/INDEX.yaml` | 📝 新增条目 | lingyu-235b-A22b-v9-2 完整条目（+ 修复重复 linked_experiments）|
+
+---
+
+### 📋 当前状态（2026-03-17 下午）
+
+| 事项 | 状态 |
+|------|------|
+| lingyu model-context.md 补全 | ✅ 完成 |
+| lingyu INDEX.yaml 注册 | ✅ 完成 |
+| lingyu 原始数据迁移 | ✅ 完成（60 个 CSV） |
+| lingyu EVAL_REPORT.md 生成 | ✅ 完成（基于实测数据） |
+| Dashboard 警告修复 | ✅ 完成（EVAL_REPORT + 重复链接） |
+| lingyu `results/lingyu_qps_sweep_20260317/REPORT.md` | ✅ 同事已生成（结论一致）|
+| guoxue Step 6/7（等 Sweep 完成） | ⏳ 进行中 |
+
+---
+
+## 📅 2026-03-18 会话 — xinghan-chart-32b-v1-1-agent QPS 压测准备
+
+### 🎯 任务目标
+新模型 `xinghan-chart-32b-v1-1-agent`（星盘普通场景）整体迁移测试，今晚开启 QPS 拐点扫描。
+- 8TP 部署：`https://infer.geniuworks.com/infra-xinghan-chart-p32b-v1-agent/v1/chat/completions`
+- 4TP 部署：`https://infer.geniuworks.com/infra-opti-xinghan-chart-p32b-v1-agent/v1/chat/completions`
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 阶段一：数据格式调研
+
+- 对比三种 JSONL 格式：
+  - `guoxue/ziwei`：`messages` 字段为内联 list，DataConverter 可直接处理
+  - `chart`（本次）：`messages` 字段为 **COS URL 字符串**，DataConverter `isinstance(msgs, list)` 判断直接返回空，**0 条数据**
+- 发现历史失败原因：
+  - `process_chart_simple.py`：`messages` 存 COS URL 字符串（非内容），伪泊松插值
+  - `process_chart_full_v2.py`：`read_only_time=True` 不拉内容；`MODEL_LIST` 缺 "星盘普通"；0 条采样
+
+#### 阶段二：取数方案确定
+
+参考 SpecForge 项目的 `download_by_indices.py`：chart JSONL 是**索引文件**，需通过 `raw_content` URL 下载实际数据。
+- `raw_content` URL 返回 JSON array：`[{role:b,...}, {role:ib,...}, {role:a, prompt:[system,user],...}]`
+- `role=a.prompt` 在 raw_content 中是**内联 list**（不是 URL），可直接用于 benchmark
+
+#### 阶段三：数据下载（全量 47,338 条）
+
+```bash
+python download_by_indices.py \
+  --input-path datas/xinghan-chart-32b-v1-1-agent_260312_260316.jsonl \
+  --output-path datas/output_chart/xinghan-chart-32b-v1-1-agent_downloaded_raw.jsonl \
+  --num-workers 16
+```
+- 耗时：40 分 44 秒
+- 结果：**47,338 / 47,338 成功，失败 0，成功率 100%**
+- 文件大小：739MB
+
+#### 阶段四：数据转换分析
+
+运行 `process_chart_full_v3.py` 转换后发现**两类记录**：
+
+| 类型 | 条数 | model 字段 | prompt | 调用链 |
+|------|------|-----------|--------|-------|
+| 直接模型调用 | **6,016** | `xinghan-chart-32b-v1-1-agent` | 内联 `[system, user]` ✅ | 用户 → 模型 |
+| Agent 框架调用 | 41,320 | `星盘普通` | `[]` 空 ❌ | 用户 → Agent(agen175...) → 模型 |
+
+"星盘普通"记录走 Agent 框架（`bot_id: agen1754fc4ce3864211b572f4dc54d3`），agent 动态构建 prompt 不存入 raw_content，`prompt2` 只有结构化参数（出生信息、占星配置），**无法还原完整 system prompt**。
+
+**最终可用数据：6,016 条**，涵盖 2026-03-11 ~ 03-15，messages 格式为 `[{role:system, content:#UserInfo:{...}}, {role:user, content:用户问题}]`。
+
+#### 阶段五：数据集与脚本准备
+
+- ✅ 生成 `datas/output_chart/xinghan-chart-32b-v1-1-agent_all.csv`（6,016 行，~16MB）
+- ✅ 清理旧失效脚本（`process_chart_full.py/v2/v3/simple.py`）
+- ✅ 新建 `scripts/data/process_chart_full_v3.py`（两层 raw_content 下载 + 转换）
+- ✅ 更新 benchmark 脚本 DATASET_PATH → `_all.csv`
+- ✅ 调整每档时长 2700s → **1500s**（因数据集 6,016 条，QPS=4.0×1500=6,000 < 6,016）
+
+---
+
+### 🐛 遇到了哪些错误
+
+| 错误 | 根因 | 解决方案 |
+|------|------|---------|
+| DataConverter 得 0 条 | chart JSONL `messages` 是 URL 字符串，`isinstance(msgs, list)` 失败 | 改用 `download_by_indices.py` 下载 raw_content |
+| `星盘普通` 41K 条 prompt 为空 | Agent 框架动态构建 prompt，不写入 raw_content | 确认只用 6,016 条直接调用记录 |
+| NUM_PROMPTS > 数据集行数 | 6,016 < QPS=4.0×2700=10,800 | 每档时长 2700→1500s |
+
+---
+
+### 🎯 技术决策
+
+1. **不尝试重建 41K agent 记录的 prompt**：system prompt 包含动态占星计算结果（行星位置等），仅靠出生参数无法还原完整内容，强行重建会产生无效请求。
+2. **QPS benchmark 不需要峰值采样**：全量 `_all.csv` 直接用，峰值采样（DataSampler+插值）仅 replay 测试需要。
+3. **每档 1500s（25min）足够找拐点**：20 档 × (1500+90)s ≈ 8.8h，预计明早看结果。
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/data/process_chart_full_v3.py` | ✨ 新建 | 两层 URL fetch 转换脚本（下载后处理） |
+| `datas/output_chart/xinghan-chart-32b-v1-1-agent_downloaded_raw.jsonl` | ✨ 新建 | 739MB，47,338 条原始数据 |
+| `datas/output_chart/xinghan-chart-32b-v1-1-agent_all.csv` | ✨ 新建 | 6,016 行 benchmark 数据集 |
+| `datas/output_chart/README.md` | ✨ 新建 | 数据集说明文档 |
+| `scripts/benchmark/run_chart_8tp_qps_sweep.sh` | 📝 修改 | DATASET_PATH→_all.csv；DURATION 2700→1500 |
+| `scripts/benchmark/run_chart_4tp_qps_sweep.sh` | 📝 修改 | DATASET_PATH→_all.csv；DURATION 2700→1500 |
+
+---
+
+### 📋 当前状态（2026-03-18 晚）
+
+| 事项 | 状态 |
+|------|------|
+| chart JSONL 格式调研 | ✅ 完成 |
+| download_by_indices.py 全量下载 | ✅ 完成（47,338/47,338，100%） |
+| 数据转换 → _all.csv | ✅ 完成（6,016 行） |
+| benchmark 脚本更新 | ✅ 完成 |
+| 8TP QPS sweep 启动 | ✅ 运行中（PID 3003452，logs/chart-32b-8tp/qps_20260318_134151/） |
+| 4TP QPS sweep 启动 | ✅ 运行中（PID 3006190，logs/chart-32b-4tp/qps_20260318_134345/） |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-18（深夜场：TTFS 指标修复 & 多CSV对比工具）
+
+### 📌 会话目标
+排查同事反馈的 TTFS 指标计算错误 Case，定位根因并修复：建立标准多CSV横向对比脚本，完善 benchmark-result-analysis Skill。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 根因诊断（`feishu_ou_5d1b9fb31b183da5d2c00574d611659c.jsonl`）
+
+通过分析 bot session 对话内容，确认了两个叠加错误：
+- **语义错误**：Bot agent 将 TTFS 误解为 "Time to First **Stream**"（首字节），正确含义是 "Time to First **Sentence**"（首句）
+- **计算错误**：原始 CSV 文件**无 `ttfs` 列**，只有 `token_list` JSON 列。Bot 临时写了 ad-hoc Python 脚本，跳过 `analysis_response()`，直接复用 TTFT 值填充了 TTFS，导致两者完全相同（如 `0.525s = 0.525s`）
+- **触发条件**：用户请求"多 CSV 横向对比"，但 SKILL 仅描述了单 CSV 分析，agent 走了错误路径
+
+#### 2. 新建 `scripts/analysis/compare_analysis.py`（多CSV标准对比脚本）
+
+- 通过 `analysis_response()` → `analysis_row()` 正确解析 `token_list`，精确计算 TTFS（扫描中文标点 `。！？，：`）
+- 输出完整指标：TTFT / TTFS / E2E / User-TPOT 的 Mean + P50/P90/P95/P99
+- Markdown 表格含各指标相对基准的变化百分比（`--base` 参数指定）
+- 可选 HTML CDF 叠加对比图（`--html` 参数）
+- 终端实时打印每个 CSV 的 TTFS P90，并附"← 注意: TTFS > TTFT 为正常"提示
+
+#### 3. 升级 `benchmark-result-analysis SKILL.md`
+
+- 新增 **"⚠️ TTFS 常见误解（必读）"** 警告表，列出 4 种误用场景及正确理解
+- 新增 **"多 CSV 横向对比"** 章节，含完整命令示例和为什么不能直接读 CSV 列的说明
+- 新增 FAQ 条目：`TTFS = TTFT（数值相同）` 和 `TTFS 被标注为 Stream` 的处理方法
+- 两份镜像（`.cursor/skills/` 和 `clingo/docs/skills/`）为符号链接，自动同步
+
+#### 4. 验证（用 session 实际 CSV 运行）
+
+对 session 中的 3 个 CSV 用新脚本重新计算：
+
+| 版本 | TTFT P90（旧）| TTFS P90（旧错误）| TTFS P90（新正确）| 差值 |
+|------|-------------|-----------------|-----------------|------|
+| 0.4.6-r08 | 0.525s | **0.525s** ❌ | **1.255s** ✅ | +0.730s（首句 decode） |
+| 0.4.6+2params-r08 | 0.486s | **0.486s** ❌ | **1.250s** ✅ | +0.764s |
+| 0.5.5-r08 | 0.561s | **0.561s** ❌ | **1.519s** ✅ | +0.958s |
+
+新结果还发现了此前被掩盖的信息：**0.5.5 版本 TTFS P90 比 0.4.6 劣化了 +21.1%**（而旧结果错误地显示为 +6.8%）。
+
+---
+
+### 🐛 遇到了哪些错误
+
+| 错误 | 原因 | 解决 |
+|------|------|------|
+| `git add .cursor/skills/.../SKILL.md` 报 `beyond a symbolic link` | `.cursor/skills/benchmark-result-analysis` 是指向 `clingo/docs/skills/...` 的符号链接，git 无法直接 add 符号链接下的文件 | 改为 `git add clingo/docs/skills/benchmark-result-analysis/SKILL.md`，符号链接另一端的文件自动同步 |
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/analysis/compare_analysis.py` | ✨ 新建 | 多CSV标准对比脚本，正确计算 TTFS |
+| `clingo/docs/skills/benchmark-result-analysis/SKILL.md` | 📝 更新 | 新增 TTFS 误解警告表、多CSV对比章节、FAQ 条目 |
+
+**Git 提交**：`8ac0917` — `fix(analysis): add compare_analysis.py and fix TTFS definition in skill`
+
+---
+
+### 📋 当前状态（2026-03-18 深夜）
+
+| 事项 | 状态 |
+|------|------|
+| TTFS 计算错误根因定位 | ✅ 完成 |
+| compare_analysis.py 新建 | ✅ 完成（已验证） |
+| benchmark-result-analysis SKILL 升级 | ✅ 完成 |
+| 代码提交 | ✅ `8ac0917` |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-18（夜场：qps-peak-finder 新方法实践验证）
+
+### 📌 会话目标
+设计并实现新的 QPS 峰值探测方法（qps-peak-finder），替代网格搜索，通过饱和探测 + 自适应逼近快速找到极限 RPS 和理想 RPS，并在 xinghan-guoxue-72b-v1-2-reason 模型上完成端到端验证。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 文档资产化
+- 新建 `clingo/docs/ai_data/xinghan-guoxue-72b-v1-2-reason-data-structure.md`：完整记录数据链路、`old_response` 回填根因与修复方案、输出 token 分布、benchmark 使用说明
+- 新建 `clingo/docs/skills/qps-peak-finder/SKILL.md`（实体），将 `.cursor/skills/qps-peak-finder/` 改为软链接（与其他 skill 保持一致）
+- 更新 `clingo/docs/skills/qps-peak-finder/SKILL.md`：新增 Phase 0 预分析步骤、`old_response` 前置条件说明、起始方向先验建议
+
+#### 2. 核心脚本实现
+- **`scripts/benchmark/run_phase1_saturation.sh`**：Phase 1 饱和探测执行脚本（`--max-concurrency` 模式，固定时长）
+- **`scripts/benchmark/run_phase2_probe.sh`**：重构为直接调用 `llm_benchmark.benchmark.benchmark`（消除 `bench_llm_benchmark_runner` wrapper 的 175MB/次 `dataset.csv` 拷贝）
+- **`scripts/benchmark/run_phase2_auto.sh`**：Phase 2a 自动收敛循环脚本（比例步进，无二分，自动解析 next_rps 并循环执行）
+- **`scripts/analysis/analyze_peak_finder.py`**（从 `scripts/data/` 迁移）：Phase 0/1/2 分析脚本，含 Phase 2a 比例收敛决策逻辑
+
+#### 3. Phase 1 饱和探测完成（xinghan-guoxue-72b-v1-2-reason）
+
+| 档位 | decode_throughput | 增幅 | 判断 |
+|------|-----------------|------|------|
+| con=20 | 319.5 t/s | 首档 | 翻倍 |
+| con=40 | 442.2 t/s | +38.4% | 翻倍 |
+| con=80 | 679.4 t/s | +53.6% | 翻倍 |
+| con=160 | 619.4 t/s | -8.8% | ← 第一次停，但步幅过大 |
+| con=120 | **716.9 t/s ← 真实峰值** | +5.5% | 线性 +10 |
+| con=130 | 667.8 t/s | -6.8% | ✅ 饱和确认 |
+
+- `peak_decode_throughput` = **716.9 tokens/s**（con=120）
+- `avg_output_len` ≈ **1,934 tokens**
+- `极限 RPS` = **0.371 req/s**
+
+#### 4. Phase 2a 自适应逼近进行中（xinghan-guoxue-72b-v1-2-reason）
+
+| 档位 | E2E P90 | SLA | 决策 |
+|------|---------|-----|------|
+| rps=0.4448 | 231.6s ❌ | 超载(ρ=1.20) | 跳到 peak×0.8 |
+| rps=0.2966 | 175.0s ❌ | 超标 17% | 比例缩小 |
+| rps=0.2622 | 170.3s ❌ | 超标 14% | 比例缩小 |
+| rps=0.2369 | 134.6s ✅ | 裕量 11.5% | 小步上探 |
+| rps=0.2529 | **运行中** | — | — |
+
+---
+
+### 🐛 遇到了哪些错误
+
+#### 错误 1：Phase 1 翻倍步进过冲
+- **现象**：con=80(+53.6%) → ×2 → con=160(-8.8%)，跳过了真实峰值区间
+- **修复**：补测 con=120(+5.5%)、con=130(-6.8%)，确认真实峰值在 con=120
+- **算法改进**：两阶段步进（>10%翻倍，1-10%线性+10）在连续翻倍后可能过冲，已讨论但未改代码（下次可加二分保护）
+
+#### 错误 2：prev-dir 加载依赖 `raw_response` 列
+- **现象**：con80 CSV 被手动裁剪后，`single_exp.py` 的 `load_exp_csv` 报 `KeyError: 'raw_response'`，导致 prev-dir 对比失效
+- **修复**：新增 `_load_decode_throughput()` 函数，优先从 `start_time/end_time/completion_token_cnt` 计算；若缺失则从 `token_list` JSON 反推时序和 token 数
+
+#### 错误 3：Phase 2a `worst_ratio` 初始化 bug（假收敛）
+- **现象**：`worst_ratio` 初始化为 1.0，SLA 通过时各指标低于限制，更新条件不触发，`slack_pct = 0%` → 误判"已收敛"
+- **修复**：将初始化改为 0.0，始终用 `actual/limit` 更新，通过和失败场景均得到正确比值
+
+#### 错误 4：`analyze_peak_finder.py` 语法错误
+- **现象**：重构 Phase 2a 决策块时遗留了旧的 `elif growth_pct is not None:` 孤立分支，导致 `SyntaxError`
+- **修复**：删除孤立 elif/else 分支
+
+#### 错误 5：Shell 脚本 `run_phase2_auto.sh` heredoc 方式失败
+- **现象**：通过 Shell 工具使用 heredoc 生成脚本报 `Aborted`
+- **修复**：改用 Write 工具直接写文件后再执行
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `clingo/docs/ai_data/xinghan-guoxue-72b-v1-2-reason-data-structure.md` | ✨ 新建 | 国学模型数据链路完整说明 |
+| `clingo/docs/skills/qps-peak-finder/SKILL.md` | ✨ 新建（实体）| 原在 `.cursor/skills/` 下，迁移为实体文件 |
+| `.cursor/skills/qps-peak-finder` | ♻️ 重构 | 改为软链接 `../../clingo/docs/skills/qps-peak-finder` |
+| `scripts/benchmark/run_phase1_saturation.sh` | ✨ 新建 | Phase 1 执行脚本 |
+| `scripts/benchmark/run_phase2_probe.sh` | ♻️ 重构 | 切换为直接调用 `llm_benchmark`，消除 dataset.csv 拷贝 |
+| `scripts/benchmark/run_phase2_auto.sh` | ✨ 新建 | Phase 2a 自动收敛循环 |
+| `scripts/analysis/analyze_peak_finder.py` | ✨ 新建（从 `scripts/data/` 迁移）| Phase 0/1/2 分析 + Phase 2a 决策 |
+| `clingo/docs/skills/traffic-dataset-prep/SKILL.md` | 📝 更新 | 补充 `old_response` 回填说明 |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-18（晚场：资产化 & 通用框架）
+
+### 📌 会话目标
+在 chart QPS sweep 运行期间，完成 benchmark 脚本资产化设计：建立通用脚本 + `.env` 配置文件体系，提升多模型管理可持续性。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 通用 Benchmark Runner 设计文档
+- 新建 `clingo/docs/designs/2026-03-18-generic-benchmark-runner-design.md`
+- 方案 C：通用脚本 + `.env` 配置文件
+- 说明目录结构、`.env` 规范、特例处理机制、新模型接入流程、**4 个 Skill 更新清单**
+
+#### 2. 三个通用脚本实现
+- `scripts/benchmark/run_qps_sweep.sh`：接受 `.env` 路径参数，自动 source 配置，校验参数，生成实验目录 README，循环执行 QPS sweep
+- `scripts/benchmark/run_replay.sh`：接受 `.env` 路径参数，校验 REPLAY_* 字段，执行 keep-income-time 回放
+- `scripts/data/process.py`：接受 `--env` 参数，按 `DATA_FORMAT` 分派 standard / indexed 处理路径
+
+#### 3. 首个模型 `.env` 配置（xinghan-chart-32b-v1-1-agent）
+- `configs/models/xinghan-chart-32b-v1-1-agent/8tp.env`：完整填写，⚠️ 注释标注 2 处特例（DATA_FORMAT=indexed、DURATION=1500）
+- `configs/models/xinghan-chart-32b-v1-1-agent/4tp.env`：对照组配置
+- `configs/models/xinghan-chart-32b-v1-1-agent/README.md`：特例说明
+- `configs/models/README.md`：共性发现根文档，包含新模型接入步骤
+
+#### 4. 4 个 Skills 更新
+- `qps-benchmark-sweep`：新增 "新模式执行方式" 节，`.env` 参数速查表，两组对照并行启动模板
+- `llm-replay-benchmark`：新增 "新模式执行方式" 节，前置参数检查说明
+- `traffic-dataset-prep`：新增 "新模式执行方式" 节，DATA_FORMAT 枚举说明，断点续传机制说明
+- `model-evaluation-workflow`：新增 Step 2.5（创建 `.env` 配置），更新 Step 3 分派逻辑，更新 Step 5 使用通用脚本
+
+---
+
+### 🐛 遇到了哪些错误
+
+无新错误，本阶段为纯设计+实现任务。
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `clingo/docs/designs/2026-03-18-generic-benchmark-runner-design.md` | ✨ 新建 | 完整设计文档，含 Skill 更新说明 |
+| `scripts/benchmark/run_qps_sweep.sh` | ✨ 新建 | 通用 QPS sweep 脚本 |
+| `scripts/benchmark/run_replay.sh` | ✨ 新建 | 通用 replay 脚本 |
+| `scripts/data/process.py` | ✨ 新建 | 通用数据处理入口 |
+| `configs/models/README.md` | ✨ 新建 | 共性发现根文档 |
+| `configs/models/xinghan-chart-32b-v1-1-agent/8tp.env` | ✨ 新建 | 8TP 部署配置 |
+| `configs/models/xinghan-chart-32b-v1-1-agent/4tp.env` | ✨ 新建 | 4TP 部署配置 |
+| `configs/models/xinghan-chart-32b-v1-1-agent/README.md` | ✨ 新建 | 模型特例说明 |
+| `clingo/docs/skills/qps-benchmark-sweep/SKILL.md` | 📝 更新 | 新增"新模式执行方式"节 |
+| `clingo/docs/skills/llm-replay-benchmark/SKILL.md` | 📝 更新 | 新增"新模式执行方式"节 |
+| `clingo/docs/skills/traffic-dataset-prep/SKILL.md` | 📝 更新 | 新增"新模式执行方式"节 |
+| `clingo/docs/skills/model-evaluation-workflow/SKILL.md` | 📝 更新 | 新增 Step 2.5，更新 Step 3/5 |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-19（chart-32b 空响应问题调查）
+
+### 📌 会话目标
+排查 xinghan-chart-32b-v1-1-agent 8TP vs 4TP QPS 扫描结果"全部 SLA FAIL"的真实原因，深入分析空响应现象，整理中间数据并建立完整事件报告。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 推翻错误诊断，定位真实根因
+
+**nanobot 的初步诊断（错误）**：`raw_response` 列格式为字符串而非 list，导致 `analysis_exception`，成功率偏低。
+
+**复核验证**：
+```python
+df, err = load_exp_csv("vanilla_qps2.000.csv")
+# raw_response type: <class 'list'>  ← 解析完全正常
+# token_list  type: <class 'list'>   ← 解析完全正常
+```
+`single_exp.py` 逻辑完全正确，无任何格式问题。
+
+**真实原因**：模型对 ~1% 的请求返回了"空响应"——`token_list` 仅 `[START]+[DONE]`，HTTP 200，`finish_reason=stop`，`matched_stop=151645`（Qwen `<|im_end|>`），`completion_tokens=1`。模型在第一个 token 采样时命中了对话结束控制符，产生 0 字可见内容。
+
+#### 2. 逐一排查并推翻 4 个假设
+
+| 假设 | 验证结论 |
+|------|---------|
+| 输入数据混入 `<|im_end|>` | ❌ 全量 6000 条 messages 中含此字符串的条数为 0 |
+| 特定 prompt 决定论触发 | ❌ 8TP/4TP 空响应 request_id 几乎无重叠（62+34 条中仅 1 条重合）|
+| 服务过载导致 | ❌ 2.0~4.0 QPS 空响应率随机波动，无单调上升趋势 |
+| 短问题更易触发 | △ 相关但非决定性（短问题略微过表达，但 ≥10字 仍占 66%）|
+
+#### 3. 使用 benchmark-result-analysis Skill 分析 qps_4.000 档位
+
+- 运行 `offline_analysis.py`，生成 HTML + 7 张 PNG 图表
+- 发现 `offline_analysis.py` 的 REPORT.md 骨架**只打印到终端，不写入文件**，手动补写完整版 REPORT.md
+- 目录（已删除，内容已整合）：`results/chart32b_8tp_qps4_analysis_20260319/`
+
+#### 4. 提取全量空响应数据
+
+新建提取脚本 `scripts/analysis/extract_null_decode.py`，处理全部 20 个 QPS 档位（共 90,005 条请求），提取 1,116 条空响应，输出至 `logs/chart-32b-8tp-null-decode/`：
+
+- `empty_responses_all.csv`：摘要格式（qps_level / user_query / query_len / matched_stop / ttfb_ms 等）
+- `badcase_for_analysis.csv`：原始格式（全列保留，兼容 analysis 工具）
+
+新建辅助脚本 `scripts/analysis/build_badcase_csv.py`，从原始 benchmark CSV 回抽完整行，生成可被 `load_exp_csv()` 直接加载的 bad case CSV。
+
+#### 5. 建立完整事件报告
+
+将三份分散的 MD 文件（summary.md / user_query_clusters.md / INCIDENT_REPORT.md）整合为单一文档 `logs/chart-32b-8tp-null-decode/REPORT.md`，串联完整叙事：事件经过 → 现象 → 排查过程 → 根本原因 → 后果 → 行动项 → 时间线。
+
+---
+
+### 🐛 遇到了哪些错误
+
+#### 错误 1：nanobot 错误诊断导致排查方向偏差
+- **现象**：nanobot 报告 `raw_response` 格式不兼容，但实际脚本运行正常
+- **解决**：直接运行 `load_exp_csv()` + `analysis_response()` 复核，输出清楚显示解析成功，推翻错误诊断，转向逐行检查 `data_error` 样本
+
+#### 错误 2：用户查询语法错误 `messages[1]content`
+- **现象**：分析工具过滤器报 `SyntaxError: invalid syntax`
+- **原因**：`messages[1]content` 不是合法 Python，应为 `messages[1]["content"]`
+- **解决**：说明过滤器本质是 Python eval 表达式，dict 字段访问需用 `["key"]` 语法
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/analysis/extract_null_decode.py` | ✨ 新建 | 提取各档位空响应摘要数据 |
+| `scripts/analysis/build_badcase_csv.py` | ✨ 新建 | 从原始 CSV 回抽完整行，生成分析工具兼容 CSV |
+| `logs/chart-32b-8tp-null-decode/REPORT.md` | ✨ 新建 | 完整事件报告（整合了三份 MD）|
+| `logs/chart-32b-8tp-null-decode/empty_responses_all.csv` | ✨ 新建 | 1,116 条空响应摘要数据 |
+| `logs/chart-32b-8tp-null-decode/badcase_for_analysis.csv` | ✨ 新建 | 1,116 条完整行，兼容 analysis 工具 |
+| `results/chart32b_8tp_qps4_analysis_20260319/` | 🗑️ 已删除 | 用户要求删除（内容已整合到 REPORT.md）|
+
+---
+
+## 🗓️ 会话记录 — 2026-03-19（上午场：qps-peak-finder Skill 成熟化）
+
+### 📌 会话目标
+在 guoxue Phase 2、Phase 3 全部跑完的基础上，分析现有算法短板，推进 `qps-peak-finder` Skill 成熟化：改进 Phase 2a 收敛算法、补全 Phase 3 分析工具、修正 SKILL.md 文档中 Phase 3 定位描述。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. Phase 2a bracket 区间收敛（Direction A）
+
+**问题根因**：纯比例步进无"历史记忆"，guoxue-72b Phase 2 探测 11 次仍振荡，已知区间 [0.2494 ✅, 0.2529 ❌]（宽 1.4%）本可立即收敛。
+
+**算法改造**（`scripts/analysis/analyze_peak_finder.py`）：
+- 新增 `--bracket-lo` / `--bracket-hi` 参数，触发阶段 2 精查
+- bracket 宽度 ≥ 3%：`next = sqrt(lo × hi)`（几何中点）
+- bracket 宽度 < 3%：直接收敛，`ideal_rps = lo`
+- 无 bracket 时维持原比例步进（阶段 1），两者无缝衔接
+- 输出机器可读标记：`[SLA_PASS]`、`[SLA_FAIL]`、`[NEXT_RPS=X.XXXX]`、`[NEXT_RPS=CONVERGED]`
+
+**实测**：传入已知 bracket [0.2494, 0.2529] → **1 次即确认收敛**（原需 11+ 次）。
+
+#### 2. run_phase2_auto.sh 全面改造（Direction A 配套）
+- 增加 `LO_RPS` / `HI_RPS` 变量，每轮自动解析 `[SLA_PASS]`/`[SLA_FAIL]` 并更新 bracket
+- 支持 `INIT_LO` / `INIT_HI` 环境变量从历史中断点续跑
+- 收敛判断改为解析 `[NEXT_RPS=CONVERGED]`（不再依赖正则匹配中文）
+
+#### 3. analyze_peak_finder.py 新增 --phase 3（Direction C）
+- `--phase 3 --dir <Phase3根目录>` 遍历所有 `qps_X.XXXX` 子目录
+- 从 `token_list` JSON 反推 TTFS/E2E/decode_throughput（兼容无 start_time/end_time 格式）
+- 输出汇总表 + SLA 状态 + E2E P50 单调性检查
+
+**guoxue Phase 3 结果**（4 档全部通过，SLA ✅，E2E P90 ≤ 135.3s）
+
+#### 4. SKILL.md 文档修正（Direction B + C）
+- **Phase 3 定位**：明确为"为 qps-sweep-comparison 绘制曲线补充中间数据密度"，而非再次逼近边界
+- **Phase 2a 决策表**：改为两阶段清晰描述（比例快速逼近 → bracket 几何中点精查）
+- **Phase 3 分析命令**：补充 `--phase 3` 汇总分析示例
+
+---
+
+### 🐛 遇到了哪些错误
+
+#### 错误 1：StrReplace 无法匹配 SKILL.md（symlink + 双 `|` 混淆）
+- **现象**：`.cursor/skills/qps-peak-finder` 是 symlink，StrReplace 读到不一致内容
+- **解决**：Python 脚本确认实际文件内容，定位真实字符后重新替换成功
+
+#### 错误 2：Shell 命令超时进入后台
+- **现象**：Phase 3 分析 + bracket 验证合并执行超过 30s block 阈值
+- **解决**：分拆命令，读取后台终端输出文件确认结果
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/analysis/analyze_peak_finder.py` | 📝 更新 | bracket 算法（`--bracket-lo/hi`）、`--phase 3` 汇总、机器可读标记 |
+| `scripts/benchmark/run_phase2_auto.sh` | 📝 更新 | LO/HI 追踪、`[SLA_PASS/FAIL]` 标记解析、`INIT_LO/HI` 续跑支持 |
+| `clingo/docs/skills/qps-peak-finder/SKILL.md` | 📝 更新 | Phase 3 定位修正、Phase 2a 两阶段决策表、`--phase 3` 命令示例 |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-19（中午场：guoxue 实验整理 & 报告生成）
+
+### 📌 会话目标
+将 guoxue Phase 1/2/3 实验结果按规范整理归档，使用 `qps-sweep-comparison` + `model-eval-report` skill 生成完整的实验报告和最终评估报告。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 分析工具链选型梳理
+梳理了 Phase 1/2/3 对应的工具链：
+- Phase 1/2：`analyze_peak_finder.py` checkpoint 已覆盖，不单独出报告
+- Phase 3（4 档 45min 稳定数据）→ `qps-sweep-comparison`（容量曲线可视化）
+- 最终报告 → `model-eval-report` skill 综合两轮实验生成 `EVAL_REPORT.md`
+
+确认 `benchmark-result-analysis` 定位是单次实验深度分析，不适用于 Phase 1/2/3 多档整合场景。
+
+#### 2. Phase 2 + Phase 3 合并目录
+- 使用 `cp -rl`（硬链接）将 Phase 3（`qps_0.2056~0.2375`，4 档）和 Phase 2（`rps0.2326~0.4448`，12 档）合并到 `logs/guoxue_phase2_phase3_merged/`
+- 合并后共 16 个子目录，覆盖完整 QPS 曲线（0.21~0.44 req/s），SLA 拐点清晰可见
+
+#### 3. qps-sweep-comparison 分析（16 档容量曲线）
+创建 YAML 配置 `configs/models/xinghan-guoxue-72b-v1-2-reason/qps_peak_finder.yaml`，运行 `multi_exp_compare`：
+- 16 档全部成功分析
+- SLA 最大 QPS：**0.2494 req/s**（与原网格搜索 0.245 偏差 1.8%，高度吻合）
+- SLA 边界：0.2494→0.2529，E2E P90 从 134.3s 跳至 165.6s（+23%）
+- 生成 3 个 HTML 图表：`plot_qps.html`、`plot_throughput.html`、`plot_latency_2d.html`
+
+#### 4. 生成 REPORT.md（Phase 1/2/3 完整实验报告）
+新建 `results/guoxue_qps_peak_finder_20260318/REPORT.md`，内容涵盖：
+- Phase 1 饱和探测各档位数据（con=20~130，peak=716.9 t/s @ con=120）
+- Phase 2 自适应逼近轨迹（11 档，bracket 收敛过程）
+- Phase 3 验证网格汇总（4 档，全部 SLA ✅）
+- 与原网格搜索对比（时间节省 2/3，精度提升 5×）
+
+#### 5. 更新 model-context.md
+追加 `peak_finder_*` 系列字段：peak_decode_throughput、max_rps_estimate、bracket lo/hi、peak_finder_sla_max_qps、与网格搜索偏差等。
+
+#### 6. 更新 EVAL_REPORT.md（综合两轮实验）
+重写 `results/models/xinghan-guoxue-72b-v1-2-reason/EVAL_REPORT.md`：
+- 摘要层：上线建议 ⚠️ 有条件上线，推荐 4 实例 × 8TP = 32 卡 L20
+- 技术层：两轮实验交叉验证表、SLA 拐点详情（含 Phase 2 视角的 +23% 跳变）、容量曲线区间特征
+
+#### 7. 目录规范修正
+发现 `qps_peak_finder_20260318` 误放在 `results/models/` 下（模型级汇总目录），应在 `results/` 根层与其他实验目录平级：
+- `mv results/models/xinghan-guoxue-72b-v1-2-reason/qps_peak_finder_20260318 results/guoxue_qps_peak_finder_20260318`
+- 更新 `model-context.md`、`EVAL_REPORT.md` 中的路径引用
+- 在 `results/README.md` 目录总览表中补充新条目
+
+---
+
+### 🐛 遇到了哪些错误
+
+#### 错误 1：实验目录放错位置
+- **现象**：将 `qps_peak_finder_20260318/` 放在 `results/models/<model>/` 下，违反目录规范
+- **发现**：用户检查 results 目录规范后指出（实验目录应在根层，模型目录只存 model-context.md 和 EVAL_REPORT.md）
+- **修复**：`mv` 到 `results/guoxue_qps_peak_finder_20260318/`，更新所有路径引用
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `logs/guoxue_phase2_phase3_merged/` | ✨ 新建 | Phase 2 + Phase 3 硬链接合并目录（16 子目录）|
+| `configs/models/xinghan-guoxue-72b-v1-2-reason/qps_peak_finder.yaml` | ✨ 新建 | qps-sweep-comparison YAML 配置 |
+| `results/guoxue_qps_peak_finder_20260318/REPORT.md` | ✨ 新建 | Phase 1+2+3 完整实验报告 |
+| `results/guoxue_qps_peak_finder_20260318/plot_*.html` | ✨ 新建 | 3 个交互式容量曲线图表 |
+| `results/models/xinghan-guoxue-72b-v1-2-reason/model-context.md` | 📝 更新 | 追加 peak-finder 各阶段结论字段 |
+| `results/models/xinghan-guoxue-72b-v1-2-reason/EVAL_REPORT.md` | 📝 更新 | 综合两轮实验，更新上线建议和技术详情 |
+| `results/README.md` | 📝 更新 | 目录总览表补充新实验条目 |
+
+---
+
+## 🗓️ 会话记录 — 2026-03-19（下午场：Dashboard 极限场景指标展示）
+
+### 📌 会话目标
+在 Dashboard 模型卡片中新增「极限场景（Phase 1 饱和测试）」可折叠区块，展示服务在硬件吞吐上限下的极限 RPS、可容并发，辅助容量规划和服务启动配置参考。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. INDEX.yaml 数据模型扩展
+为 `xinghan-guoxue-72b-v1-2-reason` 的 `performance` 块新增 3 个字段（来源：Phase 1 饱和测试结论）：
+- `saturation_rps: 0.371` — Phase 1 `max_rps_estimate`（con=120 时 decode_throughput 最高）
+- `saturation_rpm: 22.3` — 换算值
+- `saturation_concurrency: 120` — 峰值并发数
+
+字段设计为可选，null 时 Dashboard 自动跳过，其他无 Phase 1 数据的模型不受影响。
+
+#### 2. serve.py 新增极限场景渲染逻辑
+
+**`_PERFORMANCE_KEYS` 扩展**：注册三个新字段，`/api/models` 接口同步返回。
+
+**CSS 新增 `.saturation-block` 样式**：浅黄背景（`#fff8c5`）+ 橙色边框，与 SLA 合规区（白色）视觉区分，`<details>` 折叠器零 JS 依赖。
+
+**`_render_model_card()` 新增渲染分支**：
+- 有 `saturation_rps` 数据 → 渲染 `<details class="saturation-block">` 折叠块，默认收起
+- 无数据（null）→ 静默跳过，其他模型卡片不变
+
+展开后显示：
+```
+极限 RPS：0.371 req/s（22.3 RPM）
+可容并发：120
+⚠️ 硬件吞吐上限，已超出 SLA，仅供容量规划参考
+```
+
+#### 3. 设计文档归档
+写入 `clingo/docs/designs/2026-03-19-dashboard-saturation-metrics-design.md`，包含数据来源、INDEX.yaml schema、UI 展示规范、决策记录（3 个关键决策）。
+
+#### 4. INDEX.yaml 历史更新（上一对话延续）
+上一对话（session 36）中 Cursor 已更新 guoxue 的 `eval_completed_date`（→2026-03-18）、`sla_max_qps_rps`（→0.2494）、`sla_max_qps_rpm`（→14.96），并将 `guoxue_qps_peak_finder_20260318` 追加至 `linked_experiments` 首位。本次确认上述更新已生效。
+
+---
+
+### 🐛 遇到了哪些错误
+
+#### 错误 1：Visual Companion 服务器启动失败（Node.js 未安装）
+- **现象**：用户同意使用 Visual Companion，但运行 `scripts/start-server.sh` 时报 `node: command not found`
+- **原因**：该机器未安装 Node.js
+- **解决**：降级为文字 + `AskQuestion` 交互式选择完成 brainstorming 流程，功能完整性不受影响
+
+---
+
+### 🎯 技术决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| 无 Phase 1 数据的模型 | 留 null，不显示区块 | 避免用 sweep 最高测试点误导容量规划 |
+| 是否展示极限点 P90 E2E/TTFS | 不展示 | Phase 1 用 max-concurrency 模式，无直接 P90 延迟输出 |
+| 折叠方式 | `<details>` 原生标签，默认收起 | SLA 拐点是主信息，极限参数为补充参考；零 JS，无依赖 |
+| 视觉区分 | 浅黄背景 + 橙色边框 | 与白色 SLA 合规区区分，隐含"超出 SLA"的警示含义 |
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `results/models/INDEX.yaml` | 📝 更新 | guoxue performance 块新增 `saturation_rps/rpm/concurrency` |
+| `scripts/serve.py` | 📝 更新 | `_PERFORMANCE_KEYS` + CSS `.saturation-block` + `_render_model_card()` 折叠渲染 |
+| `clingo/docs/designs/2026-03-19-dashboard-saturation-metrics-design.md` | ✨ 新建 | 设计文档（数据来源、schema、UI、决策记录）|
+
+---
+
+### ✅ 验证结果
+
+| 验证项 | 结果 |
+|--------|------|
+| `curl http://172.21.208.11:18999/` HTML 含 `极限场景（Phase 1 饱和测试）` | ✅ |
+| guoxue 卡片展示 `极限 RPS：0.371 req/s（22.3 RPM）`、`可容并发：120` | ✅ |
+| 其他模型（无 saturation 字段）卡片无该区块 | ✅ |
+| `/api/models/xinghan-guoxue-72b-v1-2-reason` 返回三个新字段 | ✅ |
+| Linter 无报错 | ✅ |
+| serve.py 重启成功（PID 549426）| ✅ |

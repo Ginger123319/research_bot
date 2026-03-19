@@ -294,3 +294,97 @@ format:
 **做了什么**：编写 `scripts/export_sessions.py`，将 JSONL 自动转换为对齐 Cursor 原生导出风格的 Markdown；识别并跳过 7 个已归档会话（通过用户截图人工比对），成功导出 17 个新文件；将全部 24 个会话文件统一按时间顺序重命名为 `{nn}_cursor_{topic}.md`，提交 commit `86a62fc`（22 文件，10853 行新增）。
 
 **结果**：2026-03-14 前所有会话全部归档入 `clingo/sessions/`，编号连续（01-24），历史可追溯。
+
+---
+
+# 📅 2026-03-17 工作日报
+
+## 一、资产管理体系 Phase 1 落地
+
+**背景**：随着评估模型增多，实验结果散落在 `logs/`、`results/`、`datas/` 等多处，没有统一的结构化入口，模型档案机制（EVAL_REPORT.md）也未闭合，需要建立可被后续工具（openclaw）接管的最小资产管理体系。
+
+**做了什么**：通过 brainstorming → 设计文档 → Spec 评审（4轮）→ 执行的完整流程，落地 Phase 1：新建 `results/models/INDEX.yaml` 作为模型统一入口，建立 `logs/data-pipeline/` 区分流水线日志与实验结果，编写 `clingo/docs/workflow/reporting-template.md`（模板 A 回放报告 / 模板 B QPS 拐点报告），同步更新相关 Skill（`model-evaluation-workflow`、`qps-benchmark-sweep`）。
+
+**结果**：Phase 1 核心结构就位，commit `485d088`、`cfda6da`、`f76b711`；Phase 2（HTTP API / Dashboard 数据层）有意推迟。
+
+---
+
+## 二、Dashboard Phase 1 全面完成
+
+**背景**：INDEX.yaml 建立后，需要一个可视化界面展示各模型评估状态，供内部快速查阅，完全离线、不依赖外部服务。
+
+**做了什么**：扩展 `scripts/serve.py`，新增卡片式 Dashboard（`/`）和 JSON API（`/api/models`），显示部署配置、拐点数据、推荐建议、实验链接；修复 5 个验收问题（localhost 链接改用真实 IP、in_progress 占位文本、insights 区块位置、错误页友好提示等）。
+
+**结果**：18 项验收全部通过，commit `b620298`、`5449d08`；Dashboard 实时反映 INDEX.yaml 中的最新数据，数据更新时间戳可见。
+
+---
+
+## 三、ziwei + hepan 模型档案补全
+
+**背景**：两个最早完成评估的模型（ziwei-32b、hepan-72b）缺少标准化的 `model-context.md` 和 `EVAL_REPORT.md`，无法在 Dashboard 中正常展示，也无法被 openclaw 接管。
+
+**做了什么**：为两个模型各创建 `model-context.md` 和 `EVAL_REPORT.md`，写入部署规格、SLA 拐点、扩容建议；修复 `hepan_benchmark_20260312/REPORT.md` 中遗留的 `<见图>` 占位符（补入 TTFS/ITL 真实百分位数值）；更新 INDEX.yaml。
+
+**结果**：ziwei（TP8×2=16卡推荐 vs TP4×3=12卡备选）、hepan（5实例×8TP=40卡 L20）档案完整，Dashboard 显示正常。
+
+---
+
+## 四、guoxue QPS Sweep 分析 & 文档交付
+
+**背景**：昨天启动的 guoxue 24 档 QPS Sweep（~25 小时）今日完成，需要完成 Step 6 分析、Step 7 文档，并将模型注册到 INDEX.yaml。
+
+**做了什么**：用 `multi_exp_compare.py` 并行分析全部 24 档；对比两张 Grafana 截图（裸模型 43 RPM vs 上游 MCP 213 RPM）确认真实业务峰值；生成完整 REPORT.md、model-context.md、EVAL_REPORT.md，INDEX.yaml 将 guoxue 从 `in_progress` 更新为 `completed`。
+
+**结果**：guoxue 拐点定位在 QPS=0.245 req/s，软拐点特征（E2E 平稳增长，TTFS 全程 ≤ 0.86s 远低于门限）；因缺少回放测试，上线结论标注为 ⚠️ 待补充，不提前下结论。**5 个模型全部 completed，Dashboard 清零进行中。**
+
+---
+
+## 五、lingyu 模型资产补全（协作整理）
+
+**背景**：同事已完成 lingyu-235b-A22b-v9-2 的 QPS Sweep 并生成了部分结果，但 `model-context.md` 有 7 处 null 字段、INDEX.yaml 缺少该模型、原始 CSV 数据分散在共享目录，需要统一整理入库。
+
+**做了什么**：将 60 个原始 CSV 从共享工作区迁移至 `logs/lingyu_qps_sweep_20260317/`；从原始 CSV 解析 `token_list` 时间戳计算真实 TTFT/E2E P90（修正了以 `income_time` 为基准导致的荒谬数值 bug）；补全 model-context 全部字段；创建 EVAL_REPORT.md（21 档 SLA 明细表）；在 INDEX.yaml 注册完整条目；修复 Dashboard 链接端口错误（`logs/` 路径应路由 8765 端口，改为 `results/` 走 18999 端口）。
+
+**结果**：lingyu 档案完整，Dashboard 警告消除，6 个模型档案全部可正常展示。
+
+---
+
+# 📅 2026-03-18 工作日报
+
+## 一、chart 模型数据处理（解决 JSONL 索引文件问题）
+
+**背景**：`xinghan-chart-32b-v1-1-agent` 是新接入模型，历史处理脚本全部失败（得 0 条数据），原因不明，需从头排查并获取可用压测数据集。
+
+**做了什么**：逐层调研 chart JSONL 格式，发现与 guoxue/ziwei 的根本差异——chart 的 `messages` 字段是 COS URL 字符串而非内联 list，DataConverter 的 `isinstance(msgs, list)` 判断直接失败；参考 SpecForge 的 `download_by_indices.py` 方案，通过 `raw_content` URL 两层下载获取真实数据（47,338 条全量，耗时 ~41 分钟，100% 成功）；转换后发现 41K 条走 Agent 框架的记录 prompt 为空（动态计算，无法还原），最终可用 6,016 条直接调用记录；调整每档时长 2700s→1500s 以匹配数据集规模，启动 8TP 和 4TP 双组 QPS Sweep。
+
+**结果**：6,016 行 benchmark 数据集就绪，8TP/4TP 两组压测任务后台并行运行，预计明早出结果。
+
+---
+
+## 二、TTFS 指标计算错误修复 & 多 CSV 对比工具
+
+**背景**：同事反馈某次 benchmark 结果中 TTFS 与 TTFT 数值完全相同，怀疑计算有误。
+
+**做了什么**：定位到两个叠加错误——语义错误（TTFS 被误解为"首字节"而非"首句"）+ 计算错误（ad-hoc 脚本跳过 `analysis_response()`，直接用 TTFT 值填充 TTFS）；新建 `scripts/analysis/compare_analysis.py`，通过正确路径解析 `token_list` 计算真实 TTFS（扫描中文标点定位首句边界），支持多 CSV 横向对比并输出含变化百分比的 Markdown 表格；在 `benchmark-result-analysis` Skill 中补充"⚠️ TTFS 常见误解"警告表和多 CSV 对比章节，commit `8ac0917`。
+
+**结果**：用正确脚本重算后，TTFS P90 从错误的 0.525s 修正为 1.255s（+0.730s）；还发现被掩盖的问题——0.5.5 版本 TTFS P90 实际劣化了 +21.1%，而非旧结果显示的 +6.8%。
+
+---
+
+## 三、qps-peak-finder 新方法在 guoxue 模型上实践验证
+
+**背景**：传统网格扫描找 QPS 拐点需要 20+ 档、约 25 小时，效率太低；新的 qps-peak-finder 方法（饱和探测 + 自适应逼近）理论上可大幅缩短，需要在真实模型上验证。
+
+**做了什么**：Phase 1 通过并发翻倍步进找到 guoxue 模型的峰值吞吐（con=120 时 716.9 tokens/s，极限 RPS=0.371）；Phase 2a 基于比例步进自动逼近 SLA 合规点，循环执行 4 档后逼近至 rps=0.2529 进行中；过程中修复了三处脚本 bug（`worst_ratio` 初始化错误导致假收敛、`KeyError: raw_response`、孤立 elif 语法错误）；将核心分析脚本迁移至 `scripts/analysis/analyze_peak_finder.py`，新建 `run_phase1_saturation.sh` 和 `run_phase2_auto.sh` 执行脚本。
+
+**结果**：Phase 1 完成，极限 RPS 已确定；Phase 2a 收敛中，预计再 1~2 档可定位 SLA 合规拐点；方法可行性验证通过。
+
+---
+
+## 四、通用 Benchmark Runner 框架设计与实现
+
+**背景**：随着模型数量增加，每个模型都有一套专属脚本（run_chart_8tp_qps_sweep.sh、run_guoxue_8tp_qps_sweep.sh…），维护成本高，逻辑重复，新模型接入需要大量复制改写。
+
+**做了什么**：设计并实现"通用脚本 + `.env` 配置文件"体系（方案 C）：三个通用脚本（`run_qps_sweep.sh`、`run_replay.sh`、`process.py`）接受 `.env` 路径参数，按 `DATA_FORMAT` 等字段自动分派逻辑；以 chart 模型为首个示例，创建 `configs/models/xinghan-chart-32b-v1-1-agent/` 下 8tp/4tp 两套 `.env` 及特例说明；同步更新 4 个 Skill（`qps-benchmark-sweep`、`llm-replay-benchmark`、`traffic-dataset-prep`、`model-evaluation-workflow`）新增"新模式执行方式"节。
+
+**结果**：框架落地，新模型接入只需创建一个 `.env` 文件，无需再写专属 bash 脚本；4 个 Skill 均已同步，新成员可直接按 Skill 指引接入。

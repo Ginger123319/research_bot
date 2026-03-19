@@ -1,51 +1,75 @@
 #!/bin/bash
-# xinghan-chart-32b-v1-1-agent  QPS 拐点扫描（8TP部署）
-#
-# 场景:    推理模型长输出（max_completion_tokens=4096）
-# QPS 范围: 2.0 → 4.0（20 档，均匀分布）
-# 每档时长: 25min（1500s）  ← 数据集 6,016 条，QPS=4.0×1500=6,000 恰好满足
-# 档位冷却: 90s
-# 预计总时长: ~8.8 小时
-# 数据集:   xinghan-chart-32b-v1-1-agent_all.csv（全量数据，QPS sweep 无需峰值采样）
-# 服务:     https://infer.geniuworks.com/infra-xinghan-chart-p32b-v1-agent/v1/chat/completions
-#
-# ⚠️  启动前请先确认 endpoint 连通性：
-#     curl https://infer.geniuworks.com/infra-xinghan-chart-p32b-v1-agent/health
+# 通用 QPS 拐点扫描脚本
 #
 # 用法：
-#   后台执行：nohup bash scripts/benchmark/run_chart_8tp_qps_sweep.sh \
-#               > logs/data-pipeline/chart_8tp_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
-#   查看进度：tail -f logs/data-pipeline/chart_8tp_qps_<timestamp>.log
-#             cat logs/chart-32b-8tp/qps_<timestamp>/progress.txt
+#   nohup bash scripts/benchmark/run_qps_sweep.sh <config.env> \
+#       > logs/data-pipeline/<model>_<tp>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+#
+# 配置文件：configs/models/<model>/<tp>.env
+# 设计文档：clingo/docs/designs/2026-03-18-generic-benchmark-runner-design.md
 
 set -euo pipefail
 
 # ============================================================
-# 路径配置
+# 载入配置
+# ============================================================
+CONFIG_ENV="${1:-}"
+if [[ -z "${CONFIG_ENV}" ]]; then
+    echo "❌ 用法: bash $0 <config.env>"
+    echo "   示例: bash $0 configs/models/xinghan-chart-32b-v1-1-agent/8tp.env"
+    exit 1
+fi
+if [[ ! -f "${CONFIG_ENV}" ]]; then
+    echo "❌ 配置文件不存在: ${CONFIG_ENV}"
+    exit 1
+fi
+source "${CONFIG_ENV}"
+
+# ============================================================
+# 固定路径（不随模型变化）
 # ============================================================
 PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
 BENCH_ROOT="/mnt/ai-infra/users/wnd/workspace/execute/speculative-decoding-benchmark"
 BENCHMARK_SCRIPT="${BENCH_ROOT}/modao/src/scripts/example_llm_benchmark_test.sh"
 VENV_BIN="${PROJECT_DIR}/.venv/bin"
 
-TARGET_MODEL="/mnt/ai-llm/chartv5"
-TOKENIZER="/mnt/ai-llm/chartv5"
-DATASET_PATH="${PROJECT_DIR}/datas/output_chart/xinghan-chart-32b-v1-1-agent_all.csv"
-SERVER_URL="https://infer.geniuworks.com/infra-xinghan-chart-p32b-v1-agent/v1/chat/completions"
+# 补全相对路径
+[[ "${DATASET_PATH}" != /* ]] && DATASET_PATH="${PROJECT_DIR}/${DATASET_PATH}"
 
-GROUP_NAME="chart-32b-8tp"
-MAX_COMPLETION_TOKENS=4096   # 推理模型长输出场景
-COOLDOWN_SECS=90
+# ============================================================
+# 参数校验
+# ============================================================
+REQUIRED_VARS=(MODEL_NAME MODEL_PATH TOKENIZER DATASET_PATH SERVER_URL
+               GROUP_NAME MAX_COMPLETION_TOKENS COOLDOWN_SECS
+               QPS_START QPS_END NUM_LEVELS DURATION)
+for var in "${REQUIRED_VARS[@]}"; do
+    if [[ -z "${!var:-}" ]]; then
+        echo "❌ 配置缺失: ${var}（检查 ${CONFIG_ENV}）"
+        exit 1
+    fi
+done
 
-# QPS 扫描参数
-QPS_START=2.0
-QPS_END=4.0
-NUM_LEVELS=20
-DURATION=1500  # 25min/档（数据集 6,016 条，QPS=4.0×1500=6,000 恰好满足）
+if [[ ! -f "${DATASET_PATH}" ]]; then
+    echo "❌ 数据集不存在: ${DATASET_PATH}"
+    exit 1
+fi
+if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
+    echo "❌ benchmark 脚本不存在: ${BENCHMARK_SCRIPT}"
+    exit 1
+fi
 
+# ============================================================
+# 初始化
+# ============================================================
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="${PROJECT_DIR}/logs/${GROUP_NAME}/qps_${TIMESTAMP}"
-LOG_FILE="${PROJECT_DIR}/logs/${GROUP_NAME}_qps_${TIMESTAMP}.log"
+LOG_FILE="${PROJECT_DIR}/logs/data-pipeline/${GROUP_NAME}_qps_${TIMESTAMP}.log"
+
+export PATH="${VENV_BIN}:${PATH}"
+mkdir -p "${OUTPUT_DIR}"
+mkdir -p "$(dirname "${LOG_FILE}")"
+
+exec > >(tee -a "${LOG_FILE}") 2>&1
 
 # ============================================================
 # 生成 QPS 档位
@@ -57,30 +81,7 @@ for i in $(seq 0 $((NUM_LEVELS - 1))); do
 done
 TOTAL_LEVELS=${#QPS_LEVELS[@]}
 
-# ============================================================
-# 初始化
-# ============================================================
-export PATH="${VENV_BIN}:${PATH}"
-mkdir -p "${OUTPUT_DIR}"
-mkdir -p "$(dirname "${LOG_FILE}")"
-
-exec > >(tee -a "${LOG_FILE}") 2>&1
-
-# ============================================================
-# 前置检查
-# ============================================================
-if [[ ! -f "${DATASET_PATH}" ]]; then
-    echo "❌ 数据集不存在: ${DATASET_PATH}"
-    exit 1
-fi
-
-if [[ ! -f "${BENCHMARK_SCRIPT}" ]]; then
-    echo "❌ benchmark 脚本不存在: ${BENCHMARK_SCRIPT}"
-    exit 1
-fi
-
 DATASET_ROWS=$(wc -l < "${DATASET_PATH}")
-echo "[INFO] 数据集行数（含表头）: ${DATASET_ROWS}"
 
 # ============================================================
 # 启动摘要
@@ -93,15 +94,16 @@ done
 TOTAL_EST_H=$(echo "scale=1; ${TOTAL_EST}/3600" | bc)
 
 echo "========================================================"
-echo "xinghan-chart-32b-v1-1-agent  QPS 拐点扫描（8TP）"
+echo "${MODEL_NAME}  QPS 拐点扫描"
 echo "========================================================"
+echo "  配置文件:         ${CONFIG_ENV}"
 echo "  部署组:           ${GROUP_NAME}"
 echo "  服务 URL:         ${SERVER_URL}"
-echo "  数据集:           $(basename ${DATASET_PATH})  (峰值 120 RPM)"
+echo "  数据集:           $(basename ${DATASET_PATH})  (${DATASET_ROWS} 行含表头)"
 echo "  QPS 范围:         ${QPS_START} → ${QPS_END}（${NUM_LEVELS} 档）"
-    echo "  每档时长:         25min（1500s）"
+echo "  每档时长:         $((DURATION/60))min（${DURATION}s）"
 echo "  冷却间隔:         ${COOLDOWN_SECS}s"
-echo "  max_completion:   ${MAX_COMPLETION_TOKENS} tokens（推理模型长输出）"
+echo "  max_completion:   ${MAX_COMPLETION_TOKENS} tokens"
 echo "  预计总时长:       ~${TOTAL_EST_H} 小时"
 echo "  输出目录:         ${OUTPUT_DIR}"
 echo "  日志文件:         ${LOG_FILE}"
@@ -116,18 +118,50 @@ done
 echo "========================================================"
 echo ""
 
+# ============================================================
+# 进度文件
+# ============================================================
 PROGRESS_FILE="${OUTPUT_DIR}/progress.txt"
 echo "started_at=$(date '+%Y-%m-%d %H:%M:%S')" > "${PROGRESS_FILE}"
+echo "config=${CONFIG_ENV}" >> "${PROGRESS_FILE}"
 echo "group_name=${GROUP_NAME}" >> "${PROGRESS_FILE}"
 echo "total_levels=${TOTAL_LEVELS}" >> "${PROGRESS_FILE}"
 echo "qps_range=${QPS_START}_to_${QPS_END}" >> "${PROGRESS_FILE}"
 echo "dataset=$(basename ${DATASET_PATH})" >> "${PROGRESS_FILE}"
 
 # ============================================================
+# 写实验目录 README（规范：每个实验目录必须有 README）
+# ============================================================
+cat > "${OUTPUT_DIR}/README.md" << EOF
+# ${GROUP_NAME} QPS 拐点扫描
+
+## 实验信息
+
+| 项目 | 内容 |
+|------|------|
+| 模型 | ${MODEL_NAME} |
+| 配置文件 | ${CONFIG_ENV} |
+| 服务 URL | ${SERVER_URL} |
+| 数据集 | $(basename ${DATASET_PATH}) |
+| 执行时间 | $(date '+%Y-%m-%d %H:%M:%S') |
+
+## 配置参数
+
+- QPS 范围：${QPS_START} → ${QPS_END}（${NUM_LEVELS} 档，每档 $((DURATION/60))min）
+- 冷却间隔：${COOLDOWN_SECS}s
+- max_completion_tokens：${MAX_COMPLETION_TOKENS}
+- 预计总时长：~${TOTAL_EST_H} 小时
+
+## 结果指针
+
+- 分析报告 → \`results/<report_dir>/REPORT.md\`（sweep 完成后更新）
+- 模型汇总 → \`results/models/${MODEL_NAME}/model-context.md\`
+EOF
+
+# ============================================================
 # 主循环
 # ============================================================
 cd "${BENCH_ROOT}"
-
 CURRENT=0
 START_TIME=$(date +%s)
 
@@ -138,7 +172,7 @@ for entry in "${QPS_LEVELS[@]}"; do
 
     echo ""
     echo "========================================================"
-    echo "档位 ${CURRENT}/${TOTAL_LEVELS}  QPS=${qps}  时长=45min  NUM_PROMPTS=${NUM_PROMPTS}"
+    echo "档位 ${CURRENT}/${TOTAL_LEVELS}  QPS=${qps}  时长=$((dur/60))min  NUM_PROMPTS=${NUM_PROMPTS}"
     echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "========================================================"
 
@@ -153,7 +187,7 @@ for entry in "${QPS_LEVELS[@]}"; do
     mkdir -p "${LEVEL_DIR}"
 
     NUM_PROMPTS="${NUM_PROMPTS}" \
-    TARGET_MODEL="${TARGET_MODEL}" \
+    TARGET_MODEL="${MODEL_PATH}" \
     TOKENIZER="${TOKENIZER}" \
     CONFIG_LIST="${qps},0,0,0" \
     DATASET_PATH="${DATASET_PATH}" \
@@ -194,12 +228,10 @@ ls -1d "${OUTPUT_DIR}"/qps_* 2>/dev/null | while read d; do
     printf "  %-20s  %d 个结果文件\n" "$(basename $d)" "${csv_count}"
 done
 echo ""
-echo "分析结果（离线）:"
+echo "下一步（qps-sweep-comparison Skill）:"
 echo "  .venv/bin/python scripts/analysis/offline_analysis.py \\"
-echo "    --csv logs/${GROUP_NAME}/qps_<timestamp>/qps_<N>/<exp>.csv \\"
-echo "    --out results/chart_benchmark_<date>/<exp>_analysis.html \\"
-echo "    --png-dir results/chart_benchmark_<date> \\"
-echo "    --model-name xinghan-chart-32b-v1-1-agent"
+echo "    --exp-dir ${OUTPUT_DIR} \\"
+echo "    --model-name ${MODEL_NAME}"
 echo "========================================================"
 
 echo "completed_at=$(date '+%Y-%m-%d %H:%M:%S')" >> "${PROGRESS_FILE}"

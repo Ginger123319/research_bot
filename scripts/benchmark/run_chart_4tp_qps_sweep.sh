@@ -3,10 +3,10 @@
 #
 # 场景:    推理模型长输出（max_completion_tokens=4096）
 # QPS 范围: 2.0 → 4.0（20 档，均匀分布）
-# 每档时长: 45min（2700s）
+# 每档时长: 25min（1500s）  ← 数据集 6,016 条，QPS=4.0×1500=6,000 恰好满足
 # 档位冷却: 90s
-# 预计总时长: ~16 小时
-# 数据集:   xinghan-chart-32b-v1-1-agent_poisson_120_stitched.csv（峰值 120 RPM）
+# 预计总时长: ~8.8 小时
+# 数据集:   xinghan-chart-32b-v1-1-agent_all.csv（全量数据，QPS sweep 无需峰值采样）
 # 服务:     https://infer.geniuworks.com/infra-opti-xinghan-chart-p32b-v1-agent/v1/chat/completions
 #
 # ⚠️  启动前请先确认 endpoint 连通性：
@@ -28,9 +28,9 @@ BENCH_ROOT="/mnt/ai-infra/users/wnd/workspace/execute/speculative-decoding-bench
 BENCHMARK_SCRIPT="${BENCH_ROOT}/modao/src/scripts/example_llm_benchmark_test.sh"
 VENV_BIN="${PROJECT_DIR}/.venv/bin"
 
-TARGET_MODEL="/mnt/ai-llm/xinghan-chart-32b-v1-1"
-TOKENIZER="/mnt/ai-llm/xinghan-chart-32b-v1-1"
-DATASET_PATH="${PROJECT_DIR}/datas/output_chart/xinghan-chart-32b-v1-1-agent_poisson_120_stitched.csv"
+TARGET_MODEL="/mnt/ai-llm/chartv5"
+TOKENIZER="/mnt/ai-llm/chartv5"
+DATASET_PATH="${PROJECT_DIR}/datas/output_chart/xinghan-chart-32b-v1-1-agent_all.csv"
 SERVER_URL="https://infer.geniuworks.com/infra-opti-xinghan-chart-p32b-v1-agent/v1/chat/completions"
 
 GROUP_NAME="chart-32b-4tp"
@@ -41,7 +41,7 @@ COOLDOWN_SECS=90
 QPS_START=2.0
 QPS_END=4.0
 NUM_LEVELS=20
-DURATION=2700  # 45min/档
+DURATION=1500  # 25min/档（数据集 6,016 条，QPS=4.0×1500=6,000 恰好满足）
 
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 OUTPUT_DIR="${PROJECT_DIR}/logs/${GROUP_NAME}/qps_${TIMESTAMP}"
@@ -99,7 +99,7 @@ echo "  部署组:           ${GROUP_NAME}"
 echo "  服务 URL:         ${SERVER_URL}"
 echo "  数据集:           $(basename ${DATASET_PATH})  (峰值 120 RPM)"
 echo "  QPS 范围:         ${QPS_START} → ${QPS_END}（${NUM_LEVELS} 档）"
-echo "  每档时长:         45min（2700s）"
+    echo "  每档时长:         25min（1500s）"
 echo "  冷却间隔:         ${COOLDOWN_SECS}s"
 echo "  max_completion:   ${MAX_COMPLETION_TOKENS} tokens（推理模型长输出）"
 echo "  预计总时长:       ~${TOTAL_EST_H} 小时"

@@ -36,6 +36,8 @@ _md = MarkdownIt().enable("table")
 _PERFORMANCE_KEYS = [
     "sla_max_qps_rps", "sla_max_qps_rpm", "replay_success_rate",
     "replay_ttft_p90_s", "replay_e2e_p90_s",
+    "saturation_rps", "saturation_rpm", "saturation_concurrency",
+    "saturation_ttfs_p90_s", "saturation_e2e_p90_s",
 ]
 
 _UTF8_TYPES = {
@@ -235,6 +237,30 @@ input[type=checkbox] { margin-right: 4px; }
   max-width: 700px;
 }
 .ts-note { font-size: 12px; color: #57606a; margin-top: 16px; text-align: right; }
+.saturation-block {
+  margin-top: 8px;
+  font-size: 12px;
+}
+.saturation-block summary {
+  cursor: pointer;
+  color: #9a6700;
+  font-weight: 600;
+  user-select: none;
+  padding: 3px 0;
+  list-style: none;
+}
+.saturation-block summary::-webkit-details-marker { display: none; }
+.saturation-block summary::before { content: "▶ "; font-size: 10px; }
+details[open] .saturation-block summary::before { content: "▼ "; font-size: 10px; }
+.saturation-inner {
+  background: #fff8c5;
+  border: 1px solid #d4a72c;
+  border-radius: 4px;
+  padding: 8px 12px;
+  margin-top: 4px;
+}
+.saturation-inner span { display: block; margin: 2px 0; color: #24292f; }
+.saturation-inner .sat-warn { color: #9a6700; margin-top: 4px; font-style: italic; }
 """
 
 _HTML_TEMPLATE = """\
@@ -467,6 +493,33 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 
         warn_html = f'<p class="warn-text">{_html_escape(file_warning)}</p>' if file_warning else ""
 
+        # Saturation block (only rendered when Phase 1 data is available)
+        sat_rps = perf.get("saturation_rps")
+        sat_rpm = perf.get("saturation_rpm")
+        sat_con = perf.get("saturation_concurrency")
+        sat_ttfs = perf.get("saturation_ttfs_p90_s")
+        sat_e2e = perf.get("saturation_e2e_p90_s")
+        if sat_rps is not None:
+            sat_rpm_str = f"{sat_rpm} RPM" if sat_rpm is not None else "—"
+            sat_con_str = str(sat_con) if sat_con is not None else "—"
+            sat_ttfs_str = f"{sat_ttfs} s" if sat_ttfs is not None else "—"
+            sat_e2e_str = f"{sat_e2e} s" if sat_e2e is not None else "—"
+            latency_rows = ""
+            if sat_ttfs is not None or sat_e2e is not None:
+                latency_rows = f"""
+    <span>TTFS P90：{_html_escape(sat_ttfs_str)}</span>
+    <span>E2E P90：{_html_escape(sat_e2e_str)}</span>"""
+            saturation_html = f"""<details class="saturation-block">
+  <summary>极限场景（Phase 1 饱和测试）</summary>
+  <div class="saturation-inner">
+    <span>极限 RPS：{_html_escape(str(sat_rps))} req/s（{_html_escape(sat_rpm_str)}）</span>
+    <span>可容并发：{_html_escape(sat_con_str)}</span>{latency_rows}
+    <span class="sat-warn">⚠️ 硬件吞吐上限，已超出 SLA，仅供容量规划与启动配置参考</span>
+  </div>
+</details>"""
+        else:
+            saturation_html = ""
+
         return f"""
 <div class="model-card">
   <div class="card-title">{name}</div>
@@ -482,6 +535,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
   </div>
   {warn_html}
   <div class="card-actions">{actions_html}</div>
+  {saturation_html}
   <div class="exp-list">{exp_items}</div>
 </div>"""
 

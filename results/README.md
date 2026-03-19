@@ -1,7 +1,7 @@
 # 评估结果索引
 
 > 模型部署迁移评估实验结果归档目录  
-> 更新：2026-03-13
+> 更新：2026-03-18
 
 每个子目录对应一组实验，包含：交互式可视化 HTML（`plot_*.html`）或离线分析图（`*.png`）、量化分析报告（`REPORT.md`）。
 
@@ -21,6 +21,12 @@
 | [tianji_querysafety_4tp_fullrange_20260313](#tianji_querysafety_4tp_fullrange_20260313) | tianji-querysafety-4b | QPS 拐点（全范围）| 4TP 拐点 8.0~8.5 req/s（480 RPM），E2E P95 首超标 | 2026-03-13 |
 | [tianji_querysafety_4tp_vs_4dp_20260313](#tianji_querysafety_4tp_vs_4dp_20260313) | tianji-querysafety-4b | 4TP vs 4DP 对比（含异常点）| 含 KV Cache 异常档位的原始对比 | 2026-03-13 |
 | [tianji_querysafety_4tp_vs_4dp_filtered_20260313](#tianji_querysafety_4tp_vs_4dp_filtered_20260313) | tianji-querysafety-4b | 4TP vs 4DP 对比（剔除异常）| ✅ 最终结论：4TP 拐点 8.0 req/s，4DP 全档 FAIL | 2026-03-13 |
+| [xinghan-guoxue-72b-v1-2-reason_qps_sweep_20260316](#xinghan-guoxue-72b-v1-2-reason_qps_sweep_20260316) | guoxue-72b-reason | QPS 拐点扫描 | 拐点 0.245 req/s（14.7 RPM），E2E 主约束，无回放测试 | 2026-03-16 |
+| [guoxue_qps_sweep_20260317](#guoxue_qps_sweep_20260317) | guoxue-72b-reason | QPS 拐点扫描（完整版）| 拐点 0.245 req/s，推荐 4 实例×8TP=32 卡 L20 | 2026-03-17 |
+| [guoxue_qps_peak_finder_20260318](#guoxue_qps_peak_finder_20260318) | guoxue-72b-reason | qps-peak-finder（Phase1+2+3）| 精确边界 0.2494 req/s，与网格搜索偏差 1.8%，用时 1/3 | 2026-03-18 |
+| [lingyu_qps_sweep_20260317](#lingyu_qps_sweep_20260317) | lingyu-235b-A22b-v9 | QPS 拐点扫描 | 软拐点 2.0 req/s，全档 SLA 通过至 3.0 req/s，无回放测试 | 2026-03-17 |
+| [chart-32b-8tp_qps_20260318](#chart-32b-8tp_qps_20260318) *(进行中)* | chart-32b-agent | QPS 拐点扫描（8TP）| 🔄 进行中，预计完成 2026-03-19 | 2026-03-18 |
+| [chart-32b-4tp_qps_20260318](#chart-32b-4tp_qps_20260318) *(进行中)* | chart-32b-agent | QPS 拐点扫描（4TP 对照）| 🔄 进行中，预计完成 2026-03-19 | 2026-03-18 |
 
 ---
 
@@ -165,6 +171,85 @@
 **主要文件**：
 - `REPORT.md` — 最终对比分析报告（含根因分析与部署建议）
 - `plot_*.html` — 两组交互式对比图
+
+---
+
+---
+
+### xinghan-guoxue-72b-v1-2-reason_qps_sweep_20260316
+
+**模型**：`xinghan-guoxue-72b-v1-2-reason`（72B 八字国学长推理）  
+**类型**：QPS 拐点扫描（早期部分档位，作为完整版前驱）  
+**说明**：此目录为初期分段扫描数据，完整版见 `guoxue_qps_sweep_20260317`
+
+**主要文件**：
+- `REPORT.md` — 部分档位结果
+
+---
+
+### guoxue_qps_sweep_20260317
+
+**模型**：`xinghan-guoxue-72b-v1-2-reason`（72B 八字国学长推理）  
+**类型**：QPS 拐点扫描（完整版，8TP 部署）  
+**数据集**：Poisson 插值 220 RPM，5,726 条，24 档（0.190~0.350 req/s，60min/档）  
+**总耗时**：~25 小时（2026-03-16 16:32 → 2026-03-17 18:26）  
+**⚠️ 注意**：QPS sweep 完成，**未做回放测试**（无可用测试机）  
+**结论**：
+- SLA 最大 QPS：**0.245 req/s（14.7 RPM）**
+- 拐点类型：**E2E 软拐点**（E2E P90 在 0.255 档突破 150s，TTFS 全程余量充足）
+- 推荐部署：**4 实例 × 8TP = 32 卡 L20**（业务峰值 43 RPM，含 37% buffer）
+
+**主要文件**：
+- `REPORT.md` — 完整 QPS 拐点报告（含 24 档数值、拐点分析、扩容建议）
+- `plot_*.html` — 交互式延迟/吞吐曲线
+
+---
+
+### lingyu_qps_sweep_20260317
+
+**模型**：`lingyu-235b-A22b-v9-2`（Qwen3-235B-A22B，MoE 通用对话）  
+**类型**：QPS 拐点扫描（远端 k8s 平台，8TP 部署）  
+**数据集**：21 档（1.0~3.0 req/s，步长 0.1）  
+**⚠️ 注意**：QPS sweep 完成，**未做回放测试**（H20 环境限制）  
+**结论**：
+- 软拐点：**QPS = 2.0 → 2.1 req/s**（TTFS P90 跳变 +34%）
+- SLA 上限：**3.0 req/s**（全档成功率 100%，TTFS P90 最高 1.387s < 1.5s）
+- 推荐生产配置：单实例 ≤ 2.0 req/s（120 RPM），7 实例覆盖 800 RPM 峰值
+- 拐点类型：**软拐点**（排队累积，GPU 未饱和，延迟增长可控）
+
+**主要文件**：
+- `REPORT.md` — QPS 拐点报告（含 21 档数值、资源规划建议）
+- `plot_*.html` — 交互式 QPS/延迟/吞吐图
+
+---
+
+### chart-32b-8tp_qps_20260318
+
+**模型**：`xinghan-chart-32b-v1-1-agent`（32B 星盘普通场景，8TP 部署）  
+**类型**：🔄 QPS 拐点扫描（**进行中**）  
+**数据集**：`xinghan-chart-32b-v1-1-agent_all.csv`（6,016 条有效直接调用记录）  
+**扫描配置**：20 档（2.0~4.0 req/s，每档 25min，冷却 90s）  
+**预计完成**：2026-03-19 凌晨  
+**日志目录**：`logs/chart-32b-8tp/qps_20260318_134151/`  
+**⚠️ 数据说明**：原始索引 47,338 条中仅 6,016 条（12.7%）有完整 prompt（详见 `clingo/docs/ai_data/xinghan-chart-32b-v1-1-agent-data-structure.md`）
+
+**主要文件**（完成后更新）：
+- `REPORT.md` — QPS 拐点报告
+
+---
+
+### chart-32b-4tp_qps_20260318
+
+**模型**：`xinghan-chart-32b-v1-1-agent`（32B 星盘普通场景，4TP 对照部署）  
+**类型**：🔄 QPS 拐点扫描（**进行中**）  
+**数据集**：同 8TP 组（`xinghan-chart-32b-v1-1-agent_all.csv`，6,016 条）  
+**扫描配置**：20 档（2.0~4.0 req/s，每档 25min，冷却 90s）  
+**预计完成**：2026-03-19 凌晨  
+**日志目录**：`logs/chart-32b-4tp/qps_20260318_134345/`  
+**目的**：与 8TP 做承载能力对比（同一模型不同 TP 并行度）
+
+**主要文件**（完成后更新）：
+- `REPORT.md` — QPS 对照报告
 
 ---
 

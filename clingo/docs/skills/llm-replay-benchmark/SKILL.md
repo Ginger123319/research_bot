@@ -151,3 +151,88 @@ analysis --host 0.0.0.0 --port 8050 --exp logs/{MODEL}_peak_replay_{TIMESTAMP}
 ---
 
 **参考实验**：`logs/ziwei_peak_replay_20260310_135418`（poisson_29）、`logs/ziwei_peak_replay_20260310_163524`（poisson_100，3036 条，~60min）
+
+---
+
+## 新模式执行方式（推荐）
+
+> 适用于 2026-03-18 之后接入的新模型。旧模型专属脚本仍可用，但不再维护。
+
+**前置条件**：`configs/models/<model>/<tp>.env` 中 `REPLAY_*` 参数已填写：
+
+```bash
+# 确认 .env 已配置回放参数
+grep REPLAY configs/models/<model>/8tp.env
+# 应输出：
+# REPLAY_DATASET_PATH="datas/output_<model>/<model>_poisson_<RPM>_stitched.csv"
+# REPLAY_RPM="<N>"
+```
+
+若 `REPLAY_DATASET_PATH` 为空，先生成插值数据集（`traffic-dataset-prep` Skill 步骤4），再填写 `.env`。
+
+**.env 文件中 Replay 相关参数说明**：
+
+| 参数 | 说明 |
+|------|------|
+| `REPLAY_DATASET_PATH` | 峰值回放数据集，命名格式 `_poisson_<RPM>_stitched.csv` |
+| `REPLAY_RPM` | 目标 RPM（与文件名一致，用于命名实验和输出目录）|
+
+**执行**：
+
+```bash
+nohup bash scripts/benchmark/run_replay.sh \
+    configs/models/<model>/8tp.env \
+    > logs/data-pipeline/<model>_8tp_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# 查看进度
+tail -f logs/data-pipeline/<model>_8tp_replay_<timestamp>.log
+```
+
+通用脚本 `run_replay.sh` 自动：
+- 校验 `REPLAY_DATASET_PATH` / `REPLAY_RPM` 非空
+- 生成实验目录 README.md
+- 完成提示中输出下一步 `benchmark-result-analysis` 命令
+
+---
+
+## 实验目录 README 归档规范
+
+**触发时机**：回放实验完成（benchmark 工具打印结果统计）后，**在进行 benchmark-result-analysis 分析之前**，写入实验目录 README.md。
+
+**写入路径**：`logs/<exp_dir>/README.md`
+
+**模板**：
+
+```markdown
+# <exp_dir_name> — 峰值回放测试 <YYYY-MM-DD>
+
+## 实验信息
+| 项目 | 内容 |
+|------|------|
+| 模型 | <model_name> |
+| 部署配置 | <tp_size>TP × <dp_size>DP，<gpu_type> |
+| 场景 | <业务场景简述> |
+| 服务 URL | <server_url> |
+| 数据集 | <dataset_path>（<N> 条，目标 <RPM> RPM） |
+| 执行时间 | <started_at> → <completed_at> |
+
+## 回放配置
+| 参数 | 值 |
+|------|-----|
+| 回放模式 | --keep-income-time（保留原始时间间隔） |
+| 目标 RPM | <N>（线上峰值 <M> RPM 的 <x>× 倍） |
+| 总请求数 | <N> 条 |
+| 持续时长 | ~<N> 分钟 |
+
+## 快速结论
+- 成功率：<N>%
+- TTFT P90：<x>s
+- E2E P90：<x>s
+- 结论：✅ 通过 / ❌ 未通过
+
+## 结果指针
+- 分析报告 → `results/<report_dir>/REPORT.md`
+- 模型汇总 → `results/models/<model>/model-context.md`
+```
+
+> **注意**：`logs/archive/` 用于存放已过期或合并后的重复实验，不是已完成实验的归档地点。

@@ -239,7 +239,7 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 | 步骤 | 检查项 |
 |------|--------|
 | 转换后（步骤1） | 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
-| 合并后（步骤1.5） | **若执行**：`_all.csv` 列变为 6 列（`messages`、`old_response` 存在且非空）；行数与日期分片之和一致。**若跳过（纯采样路径）**：确认下一步为 DataSampler，且全流程中不直接使用 `_all.csv` |
+| 合并后（步骤1.5） | **若执行**：`_all.csv` 列变为 6 列；`old_response` 非空率应接近 100%（DataConverter **不**自动提取模型回复，需在步骤1.5 手动从 JSONL 按 `line_num` 回填：`line_num = jsonl_row_index + 1`，提取 `messages[role='a'].content`）；行数与日期分片之和一致。**若跳过（纯采样路径）**：确认下一步为 DataSampler，且全流程中不直接使用 `_all.csv` |
 | 采样后 | 峰值 RPM 是否符合预期；各段起止时间 |
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
 | 插值后 | 峰值 RPM 达到 `TARGET_RPM`；messages 有内容行数 |
@@ -286,6 +286,58 @@ data-processor convert -i data.jsonl -o output/ -m "xinghan-hepan-72b-v1-2,星�
 | `income_time` 时区偏移 8 小时 | B | 未做 `tz_convert("Asia/Shanghai")` | 加 `.dt.tz_convert("Asia/Shanghai").dt.tz_localize(None)` |
 | `KeyError: 'prompt'`（benchmark 启动报错）| A/B | benchmark 工具强制要求 CSV 有 `prompt` 列 | 输出列必须包含空 `prompt`：`OUTPUT_COLS = ["income_time", "prompt", "messages", ...]` |
 | `KeyError: 'old_response'`（benchmark 启动报错）| A | 直接使用 DataConverter 输出的 `_all.csv`（3 列索引文件，无 `messages`/`old_response`）| 执行步骤1.5 合并日期分片覆盖写回，或手动合并 `_2026-MM-DD.csv` 文件 |
+| `old_response` 全为空（Phase 0 / 输出长度分析无结果）| A | DataConverter **不**提取模型历史回复，步骤1.5 的 `fillna("")` 只填空串不填内容 | 在步骤1.5 合并后从原始 JSONL 按 `line_num`（= jsonl行索引+1）提取 `messages[role='a'].content` 回填；同时覆盖写回日期分片 CSV，确保下游 DataSampler 采样文件也含 `old_response` |
+
+---
+
+## 新模式执行方式（推荐）
+
+> 适用于 2026-03-18 之后接入的新模型。旧模型专属处理脚本仍可用，但不再维护。
+
+**Step 1**：确认 `configs/models/<model>/<tp>.env` 中数据处理参数已填写：
+
+```bash
+grep -E "DATA_FORMAT|INPUT_JSONL|OUTPUT_DIR|MODEL_LIST|DATASET_PATH" \
+    configs/models/<model>/8tp.env
+```
+
+**.env 文件中数据处理参数说明**：
+
+| 参数 | 枚举值 | 说明 |
+|------|--------|------|
+| `DATA_FORMAT` | `standard` | messages 内联 list（guoxue/ziwei 类型），走 DataConverter pipeline |
+| `DATA_FORMAT` | `indexed` | messages 是 COS URL（chart 类型），先下载再转换 |
+| `INPUT_JSONL` | — | 原始索引/数据 JSONL 路径（相对 PROJECT_DIR）|
+| `OUTPUT_DIR` | — | 处理产物输出目录 |
+| `MODEL_LIST` | — | 模型别名，逗号分隔，必须覆盖所有写法（⚠️ 高频踩坑）|
+| `DATASET_PATH` | — | 最终 benchmark 数据集路径（`_all.csv` 或 `_poisson_*_stitched.csv`）|
+| `DATASET_TYPE` | `all` | QPS sweep 用，无需峰值采样 |
+| `DATASET_TYPE` | `peak` | replay 用，需要泊松插值（配合 `TARGET_PEAK_RPM`）|
+
+**Step 2**：执行
+
+```bash
+# 标准模式（guoxue/ziwei）
+python scripts/data/process.py --env configs/models/<model>/8tp.env
+
+# 索引模式（chart 类型）—— process.py 自动调用 download_by_indices.py
+python scripts/data/process.py --env configs/models/<model>/8tp.env
+```
+
+**Step 3**：验证
+
+```bash
+# 检查输出行数（应与业务数据量匹配）
+wc -l datas/output_<model>/<model>_all.csv
+
+# 如果行数明显偏低，检查 MODEL_LIST 是否漏了别名
+grep "MODEL_LIST" configs/models/<model>/8tp.env
+```
+
+> `indexed` 模式（DATA_FORMAT=indexed）的特殊注意：
+> - `process.py` 先检查 `_downloaded_raw.jsonl` 是否已存在
+> - 已存在则**跳过下载**，直接执行转换（断点续传机制）
+> - 若下载不完整需重新下载，先删除 `_downloaded_raw.jsonl`
 
 ---
 

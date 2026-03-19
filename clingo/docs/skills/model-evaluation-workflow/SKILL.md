@@ -31,6 +31,7 @@ description: Use when onboarding a new LLM model end-to-end — from local Docke
                                         → llm-replay-benchmark Skill（有数据时）
   Step 6  结果分析 & 报告归档           → benchmark-result-analysis Skill
                                         → qps-sweep-comparison Skill
+  Step 6.5 实验目录 README & 索引更新  → （强制，无独立 Skill，直接执行）
   Step 7  生成评估报告                  → model-eval-report Skill
 ```
 
@@ -183,19 +184,52 @@ usage_scenario: <使用场景描述>
 
 ---
 
+## Step 2.5：创建模型配置文件（新模型必须）
+
+**前置检查（跳过条件）**：`configs/models/<model>/<tp>.env` 已存在 → 跳过
+
+**操作**：
+
+```bash
+# 创建目录
+mkdir -p configs/models/<model-name>
+
+# 从 model-context.md 提取参数填充 .env
+# 参照已有配置创建（以 chart 为模板）
+cp configs/models/xinghan-chart-32b-v1-1-agent/8tp.env \
+   configs/models/<model-name>/8tp.env
+# 必须修改：MODEL_NAME / MODEL_PATH / SERVER_URL / GROUP_NAME /
+#          DATA_FORMAT / INPUT_JSONL / QPS_* / DURATION
+# 如有特例：在 .env 对应行加 ⚠️ 注释，并写 configs/models/<model-name>/README.md
+```
+
+**产物验证**：`configs/models/<model-name>/8tp.env` 存在，所有必填字段非空
+
+---
+
 ## Step 3：数据处理
 
 **前置检查（跳过条件）**：
 ```bash
+ls datas/output_<model>/*_all.csv               # 全量数据集已存在
 ls datas/output_<model>/*_poisson_*_stitched.csv  # 泊松插值数据已存在
-ls datas/output_<model>/*_peak*.csv               # 峰值窗口数据已存在
 # → 任一存在则跳过，说明"数据集已就绪"
 ```
 - 用户确认无业务数据 → 跳过，Step 5 改用 `_all.csv` 全量扫描
 
-**调用**：`traffic-dataset-prep` Skill
-- 情况 A：JSONL 日志 → 6步管道
-- 情况 B：CSV + 系统提示模板 → Skill 情况 B 路径
+**调用**：`traffic-dataset-prep` Skill（**新模式：通用脚本方式**）
+
+```bash
+# 新模式（推荐，2026-03-18 后新接入模型）
+python scripts/data/process.py --env configs/models/<model>/<tp>.env
+
+# 旧模式（历史模型专属脚本，不再维护）
+python scripts/data/process_<model>_full.py
+```
+
+`DATA_FORMAT` 由 `.env` 决定：
+- `standard`：JSONL messages 内联（guoxue/ziwei 类型）→ DataConverter pipeline
+- `indexed`：JSONL messages 是 URL（chart 类型）→ 先下载再转换
 
 **产物验证**：`datas/output_<model>/README.md` 存在，核心文件行数合理
 
@@ -203,7 +237,7 @@ ls datas/output_<model>/*_peak*.csv               # 峰值窗口数据已存在
 ```markdown
 ### Step 3 ✅ 数据处理（YYYY-MM-DD）
 - 最终数据集：<路径>，<行数> 条，峰值 <RPM> RPM
-- 处理方式：情况 A（JSONL）/ 情况 B（CSV+模板）
+- 处理方式：standard（JSONL 内联）/ indexed（URL 下载）
 ```
 
 **model-context.md 追加**：
@@ -274,19 +308,37 @@ ls logs/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
 ```
 
 **执行顺序**（有业务数据时）：
-1. 先跑 `llm-replay-benchmark` Skill —— 峰值回放，验证成功率/延迟 SLA
-2. 再跑 `qps-benchmark-sweep` Skill —— QPS 拐点扫描（耗时数小时，后台执行）
+1. 先跑 `qps-benchmark-sweep` Skill —— QPS 拐点扫描，确认最大稳定 QPS
+2. sweep 完成后，若需验证真实流量形态，再跑 `llm-replay-benchmark` Skill
 
 无业务数据时：仅跑 `qps-benchmark-sweep`。
 
-**推理参数透传**（Step 0 若收集了业务推理参数）：
+**新模式（推荐）**：通过 `.env` 配置文件驱动通用脚本
+
 ```bash
-# benchmark 命令附加参数示例
---temperature 0.95 --top-p 0.90 --max-completion-tokens 4096
+# QPS sweep（并行启动两组部署对照）
+nohup bash scripts/benchmark/run_qps_sweep.sh \
+    configs/models/<model>/8tp.env \
+    > logs/data-pipeline/<model>_8tp_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+nohup bash scripts/benchmark/run_qps_sweep.sh \
+    configs/models/<model>/4tp.env \
+    > logs/data-pipeline/<model>_4tp_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# replay（sweep 完成后，.env 中填好 REPLAY_* 参数）
+nohup bash scripts/benchmark/run_replay.sh \
+    configs/models/<model>/8tp.env \
+    > logs/data-pipeline/<model>_8tp_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+```
+
+**旧模式（历史参考）**：
+```bash
+nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
+    > logs/data-pipeline/<model>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 ```
 
 > ⚠️ QPS 扫描耗时长（数小时），启动后告知用户预估时间并 `nohup` 后台执行，不阻塞会话。  
-> nohup 重定向路径统一写入 `logs/data-pipeline/`：`nohup bash scripts/benchmark/run_<model>_qps_sweep.sh > logs/data-pipeline/<model>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &`
+> nohup 重定向路径统一写入 `logs/data-pipeline/`。
 
 **progress.md 写入**：
 ```markdown
@@ -337,6 +389,49 @@ sla_max_qps: <x>
 sla_threshold: "<模型特定 SLA 门限描述，如 E2E P95 ≤ 400ms>"
 inflection_type: <软拐点 / 硬拐点，及触发指标说明>
 ```
+
+---
+
+## Step 6.5：实验目录 README & results/README.md 更新（强制）
+
+> 每次 Step 5/6 完成后**必须执行**，确保实验可回溯，不依赖记忆或翻查 logs。
+
+**前置检查（跳过条件）**：`logs/<exp>/README.md` 已存在且结论非空 → 跳过
+
+**操作 1**：为每个新完成的实验目录写 `logs/<exp>/README.md`
+
+每个实验目录的 README 包含：
+- 模型名称、部署配置（TP/DP/GPU）、服务 URL、数据集路径
+- 测试类型（QPS sweep / 回放）与配置参数
+- 快速结论（成功率、拐点 QPS、P90 延迟）
+- 结果指针 → `results/<report_dir>/REPORT.md`
+
+参考模板见：
+- `qps-benchmark-sweep` Skill → "实验目录 README 归档规范"
+- `llm-replay-benchmark` Skill → "实验目录 README 归档规范"
+
+**操作 2**：更新 `results/README.md`
+
+在目录总览表新增一行，并在详细说明节追加完整描述段落。
+
+**操作 3**：`results/models/INDEX.yaml` 中的 `linked_experiments`
+
+将临时占位的 `logs/` 路径替换为正式的 `results/` 路径：
+```yaml
+linked_experiments:
+  - results/<experiment_dir>   # ← 从 logs/ 改为 results/
+```
+
+**progress.md 写入**：
+```markdown
+### Step 6.5 ✅ 实验目录归档（YYYY-MM-DD）
+- logs/<exp>/README.md 已写入
+- results/README.md 已更新
+- INDEX.yaml linked_experiments 已更新为 results/ 路径
+```
+
+> ⚠️ `logs/archive/` 用于存放**已过期或合并后的重复实验**，不是已完成实验的归档地点。
+> 已完成实验目录保留原位（`logs/<exp>/`），README.md 是其可读性保证。
 
 ---
 

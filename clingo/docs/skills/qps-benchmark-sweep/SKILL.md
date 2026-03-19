@@ -153,7 +153,59 @@ tail -f logs/<exp>.log
 
 ---
 
-## 执行命令
+## 新模式执行方式（推荐）
+
+> 适用于 2026-03-18 之后接入的新模型。旧模型专属脚本（`run_<model>_qps_sweep.sh`）仍可用，但不再维护。
+
+**Step 1**：确认 `configs/models/<model>/<tp>.env` 已存在，否则先创建：
+
+```bash
+# 参照已有模型配置复制
+cp configs/models/xinghan-chart-32b-v1-1-agent/8tp.env \
+   configs/models/<new-model>/8tp.env
+# 修改：MODEL_NAME / MODEL_PATH / SERVER_URL / GROUP_NAME /
+#       DATA_FORMAT / INPUT_JSONL / QPS_START / QPS_END / DURATION 等
+```
+
+**.env 文件中 QPS 相关参数说明**：
+
+| 参数 | 说明 | 典型值 |
+|------|------|--------|
+| `QPS_START` | 起始 QPS（通常略高于业务峰值 QPS）| `2.0` |
+| `QPS_END` | 结束 QPS（业务峰值 QPS 的 2~3x）| `4.0` |
+| `NUM_LEVELS` | 档位数 | `20`（首次探索）/ `10`（精查）|
+| `DURATION` | 每档时长（秒），必须满足 `QPS_END × DURATION ≤ 数据集行数` | `2700`（标准）/ 按数据量调整 |
+| `MAX_COMPLETION_TOKENS` | 最大输出 token | `4096`（对话）/ `256`（安全拦截）|
+| `COOLDOWN_SECS` | 档位间冷却 | `90`（对话）/ `60`（安全拦截）|
+
+**Step 2**：执行（nohup 日志统一写 `logs/data-pipeline/`）：
+
+```bash
+nohup bash scripts/benchmark/run_qps_sweep.sh \
+    configs/models/<model>/8tp.env \
+    > logs/data-pipeline/<model>_8tp_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+
+# 并行启动对照组（4TP）
+nohup bash scripts/benchmark/run_qps_sweep.sh \
+    configs/models/<model>/4tp.env \
+    > logs/data-pipeline/<model>_4tp_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+```
+
+**Step 3**：监控
+
+```bash
+# 查看当前进度
+cat logs/<group_name>/qps_<timestamp>/progress.txt
+
+# 实时日志
+tail -f logs/data-pipeline/<model>_<tp>_qps_<timestamp>.log
+```
+
+> 通用脚本 `run_qps_sweep.sh` 自动生成实验目录 README.md，无需手动补写。
+
+---
+
+## 执行命令（旧模式，历史参考）
 
 ```bash
 # 后台长时间运行（推荐）
@@ -240,3 +292,46 @@ analysis --host 0.0.0.0 --port 8050 --exp logs/<model>_<config>_all_filtered/
 ---
 
 **参考脚本**：`scripts/benchmark/run_tianji_querysafety_qps_sweep.sh`、`run_tianji_querysafety_opti_qps_sweep.sh`、`run_ziwei_4tp_qps_benchmark.sh`
+
+---
+
+## 实验目录 README 归档规范
+
+**触发时机**：sweep 脚本打印"全部 N 档完成"后，**在进入分析（qps-sweep-comparison Skill）之前**，写入实验目录 README.md。
+
+**写入路径**：`logs/<group_name>/qps_<timestamp>/README.md`
+
+**模板**：
+
+```markdown
+# <group_name> QPS Sweep — <YYYY-MM-DD>
+
+## 实验信息
+| 项目 | 内容 |
+|------|------|
+| 模型 | <model_name> |
+| 部署配置 | <tp_size>TP × <dp_size>DP，<gpu_type> |
+| 场景 | <业务场景简述> |
+| 服务 URL | <server_url> |
+| 数据集 | <dataset_path>（<N> 条） |
+| 执行时间 | <started_at> → <completed_at> |
+
+## 扫描配置
+| 参数 | 值 |
+|------|-----|
+| QPS 范围 | <start> → <end>（<N> 档） |
+| 每档时长 | <duration>s（<min>min） |
+| 冷却间隔 | <cooldown>s |
+| max_completion_tokens | <N> |
+
+## 快速结论
+- 拐点 QPS：（完成 qps-sweep-comparison 分析后填写）
+- SLA 合规最大 QPS：（分析后填写）
+
+## 结果指针
+- 分析报告 → `results/<report_dir>/REPORT.md`
+- 模型汇总 → `results/models/<model>/model-context.md`
+- 全局索引 → `results/models/INDEX.yaml`
+```
+
+> **注意**：`logs/archive/` 用于存放已过期或合并后的重复实验，不是已完成实验的归档地点。已完成实验目录保留原位，README.md 是其可读性保证。

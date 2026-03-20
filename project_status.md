@@ -1,3 +1,118 @@
+# 会话报告 — 2026-03-19（晚场：ziwei-32b-v1 8TP 复验 qps-peak-finder）
+
+## 📌 会话概览
+
+- **日期**：2026-03-19（周三，下午~晚间）
+- **主要目标**：对新部署服务 `https://infer-test.geniuworks.com/infra-xinghan-ziwei-p32b-v1-test/v1/chat/completions` 使用 `qps-peak-finder` Skill 全程自动运行 8TP 复验
+- **Git 分支**：main
+- **触发背景**：用户重新部署了 xinghan-ziwei-32b-v1，需要复验 8TP 的真实 QPS 容量上限，沿用 qps-peak-finder Phase 0/1/2 流程；用户明确授权"整个流程自行判断运行，无问题不干涉"
+
+---
+
+## ✅ 成果
+
+### 1. Phase 0 — old_response 回填与 token 分布验证
+
+- **回填脚本**：自定义 Python 脚本，从 `datas/xinghan-ziwei-32b-v1-1_260303_260305.jsonl` 提取 `role='a'` 字段，写回 CSV 的 `old_response` 列
+- **line_num 格式处理**：Poisson 插值导致 `line_num` 含 `_p_0` 后缀，使用 `split('_p_')[0]` 提取原始行号，实现 100% 回填
+- **Phase 0 结论**：avg_output_len = **245.9 tokens**，P90 = 395.6 tokens
+
+### 2. Phase 1 — 全自动饱和探测
+
+**脚本**：`scripts/benchmark/run_phase1_auto_ziwei8tp.sh`
+
+| 并发 | decode_throughput | 增幅 | 决策 |
+|------|------------------|------|------|
+| con=25 | 317.485 t/s | — | 翻倍 |
+| con=50 | 322.117 t/s | +1.46% | +10 |
+| con=60 | 328.613 t/s | +2.02% | +10 |
+| con=70 | 366.665 t/s | +11.58% | 翻倍 |
+| **con=140** | **184.488 t/s** | **-49.68%** | ❌ 饱和 |
+
+**饱和结论**：Peak 档位 = con=70，**max_rps_estimate = 2.0935 req/s**（decode_throughput = 366.665 t/s）
+
+### 3. Phase 2 — 自适应 RPS 收敛（进行中）
+
+**脚本**：`scripts/benchmark/run_phase2_auto_ziwei8tp.sh`
+
+| 轮次 | RPS | TTFS P90 | SLA |
+|------|-----|---------|-----|
+| 第1轮 | 2.5122 | 12615ms | ❌ |
+| 第2轮 | 1.6748 | 1783ms | ❌（超 19%）|
+| 第3轮 | 1.4584 | 1291ms | ✅ |
+| 第4轮 | 1.5629 | 运行中 | 🔄 |
+
+当前 bracket = [1.4584, 1.6748]，宽 14.8%，仍需 1~2 档收敛
+
+**⚠️ 关键发现**：生产 RPM 100（=1.6667 req/s）在 SLA 边界附近，rps=1.6748 已 FAIL（TTFS P90=1783ms，超限 19%）；ideal_rps 预计 1.46~1.57 req/s，低于生产负载，**需要关注是否需要扩容**
+
+---
+
+## 🔧 文件变更
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/benchmark/run_phase1_auto_ziwei8tp.sh` | ✨ 新建 | Phase 1 全自动饱和探测，含 con=25 续跑逻辑 |
+| `scripts/benchmark/run_phase2_auto_ziwei8tp.sh` | ✨ 新建（上轮）| Phase 2 自适应收敛，几何中点二分法 |
+
+**运行日志**：
+- Phase 1: `logs/ziwei-32b-8tp-phase1_20260319/`
+- Phase 2: `logs/ziwei-32b-8tp-phase2_20260319/`（含 `phase2_checkpoint.md`）
+
+---
+
+## 🐛 问题与解决方案
+
+| 问题 | 根因 | 解决 |
+|------|------|------|
+| Phase 2 以 PEAK_RPS=184.488 启动（221 req/s 起测）| `grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+'` 命中公式行首个数字（decode_throughput）而非最终结论 | 手动以 PEAK_RPS=2.0935（con=70 正确值）重启 Phase 2 |
+| 数据集行数不足报错（仅 106s 有效时长）| 221 req/s × 1200s × 1.2 = 317,520 条，远超数据集 28,400 行 | 使用正确的 PEAK_RPS 后自动解决 |
+| con=140 实际耗时 901s（设计 300s）| 140 个并发 in-flight 在 TIME_LIMIT 到期后仍需等待全部返回 | 对结果无影响，属正常超载行为 |
+
+---
+
+## 🎯 技术决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| Phase 1 饱和判断标准 | -49.68%（绝对降幅）判定为饱和 | 超出 50% 阈值，已无需关注增幅规则 |
+| Phase 2 峰值 RPS 来源 | 取 con=70（降幅前最后档）的 max_rps_estimate | con=140 超载，其 max_rps_estimate（0.8065）明显被低估 |
+| Phase 2 起始 RPS | PEAK_RPS × 1.2 = 2.5122 | 标准 qps-peak-finder 流程，覆盖搜索范围上界 |
+
+---
+
+## ⚠️ 未完成事项
+
+| 事项 | 状态 | 说明 |
+|------|------|------|
+| Phase 2 收敛 | 🔄 进行中 | 第4轮 rps=1.5629 运行中，bracket=[1.4584, 1.6748]，预计还需 1~2 档 |
+| Phase 3 网格测试 | ⏳ 待 Phase 2 收敛后执行 | 4 档 × 45min，覆盖生产区间 |
+| REPORT.md 生成 | ⏳ 待 Phase 3 完成 | 含各阶段汇总、SLA 结论、扩容建议 |
+| **SLA 风险评估** | ⚠️ 需关注 | ideal_rps 预计 < 生产 1.6667 req/s，需确认是否需扩容实例 |
+| run_phase1_auto_ziwei8tp.sh MAX_RPS 提取修复 | ⏳ 技术债 | 正则需改为从上一档 checkpoint 提取，而非 analyze 输出行 |
+
+---
+
+## 💡 建议与注意事项
+
+1. **SLA 风险高**：rps=1.6748（≈100 RPM）已 SLA FAIL，即生产 RPM 在 TTFS P90 限额附近。如果 ideal_rps < 1.6667 req/s，当前 8TP 单实例无法独立承载 100 RPM，需要考虑扩容
+2. **Phase 2 无需手动干预**：脚本在后台自动运行，每档 1200s（20min），预计 Phase 2 在 21:30 前后收敛
+3. **历史基准对比**：上次复验（2026-03-10）结果存于 `results/ziwei_benchmark_20260310_163524/REPORT.md`，完成后需对比两次结论差异
+
+---
+
+## 📈 下次会话计划
+
+1. **Phase 2 收敛确认**：查看 `logs/ziwei-32b-8tp-phase2_20260319/phase2_checkpoint.md`，确认 ideal_rps
+2. **Phase 3 执行**（取决于 Phase 2 结果）：
+   ```bash
+   IDEAL_RPS=<Phase2结论> bash scripts/benchmark/run_phase3_grid_ziwei8tp.sh
+   ```
+3. **SLA 结论分析**：对比 ideal_rps vs 生产 1.6667 req/s，给出是否需要扩容的明确建议
+4. **REPORT.md 生成**：使用 `qps-sweep-comparison` Skill 生成容量曲线图表 + 完整报告
+
+---
+
 # 会话报告 — 2026-03-19（下午场：Dashboard 极限场景指标展示）
 
 ## 📌 会话概览
@@ -2053,3 +2168,118 @@ chart 模型两处特例：
    ```bash
    INIT_LO=0.2494 INIT_HI=0.2529 bash scripts/benchmark/run_phase2_auto.sh
    ```
+
+---
+
+# 会话报告 — 2026-03-19（xinghan-chart-32b-v1-1-agent QPS Peak Finder）
+
+## 📌 会话概览
+- **日期**：2026-03-19
+- **主要目标**：完成 chart-32b 模型 4TP/8TP 双路 Phase 2 自适应逼近，修复 auto 脚本 Bug，启动 Phase 3 网格测试
+- **关联模型**：`xinghan-chart-32b-v1-1-agent`
+- **关联日志**：
+  - 8TP Phase 2: `logs/chart-32b-8tp-phase2_20260319/`
+  - 4TP Phase 2: `logs/chart-32b-4tp-phase2_20260319/`
+  - 8TP Phase 3: `logs/chart-32b-8tp-phase3_20260319/`（进行中）
+  - 4TP Phase 3: `logs/chart-32b-4tp-phase3_20260319/`（待启动）
+
+---
+
+## ✅ 关键成果
+
+### 8TP Phase 2 — 已收敛 ✅
+```
+ideal_rps = 7.6132 req/s
+TTFS P90  = 1488 ms（SLA 上限 1500ms）
+E2E P90   = 26.97 s
+bracket   = [7.6132, 7.8058]，宽 2.5%
+探测档数  = 7 档（含 1 档冗余）
+```
+
+### 4TP Phase 2 — 进行中（截至记录）
+```
+当前 bracket = [4.1923, 4.4103]，宽 5.2%
+最新通过档   = rps4.1923（TTFS P90 = 1461ms）
+预计 ideal_rps ≈ 4.19~4.30 req/s
+预计完成时间 ≈ 2026-03-19 20:10
+```
+
+### Phase 3 状态
+```
+8TP Phase 3：运行中，档位 0.667/2.982/5.298/7.613 req/s，预计 22:30 完成
+4TP Phase 3：自动衔接脚本已就位（PID=783327），Phase 2 收敛后自动触发
+```
+
+---
+
+## 🐛 重要 Bug 记录与修复
+
+### Bug 1：Phase 2 auto 脚本 bracket next_rps 错位
+- **症状**：通过档 LO 更新后，下一探测档 RPS 反而低于已通过档（如 7.242 Pass → 探 7.221）
+- **根因**：analyze 基于旧 bracket 算出 next_rps 并打印，shell 更新 LO 后未重算
+- **修复**：bracket 更新后在 shell 层重新计算，不复用 analyze 输出值
+- **影响文件**：`run_phase2_auto_chart8tp.sh`、`run_phase2_auto_chart4tp.sh`
+
+### Bug 2：Phase 2 auto 脚本 bracket 宽度 50% 时误判收敛
+- **症状**：4TP rps3.985 通过（TTFS 裕量仅 1.7%），脚本误判收敛，ideal_rps=3.985 严重低估
+- **根因**：analyze 输出 `[NEXT_RPS=CONVERGED]`（比例步进"裕量<5%"规则），旧代码直接采信；且进程启动时已缓冲旧脚本
+- **修复**：ELSE 分支增加 bracket 宽度防护（≥3% 时忽略 CONVERGED 继续二分）
+- **恢复**：手动 `INIT_LO=3.9851 INIT_HI=5.9777` 续跑，从正确 bracket 继续
+
+---
+
+## 🔧 新增文件
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/benchmark/run_phase3_grid_chart8tp.sh` | 8TP Phase 3（4档×45min，linspace 固定档位）|
+| `scripts/benchmark/run_phase3_grid_chart4tp.sh` | 4TP Phase 3（IDEAL_RPS 参数化，自动 linspace）|
+| `scripts/benchmark/run_phase3_auto_chart4tp.sh` | 4TP Phase 3 自动衔接（轮询日志→触发 Phase 3）|
+
+---
+
+## 📋 下次会话必读
+
+### 1. 检查 4TP Phase 2 是否已收敛
+```bash
+tail -20 logs/phase2_chart4tp_resume_20260319.log
+# 查看是否有 "Phase 2a 收敛完成！ideal_rps = X.XXXX"
+```
+
+### 2. 检查 Phase 3 运行状态
+```bash
+# 8TP Phase 3
+tail -30 logs/phase3_chart8tp_20260319.log
+ls logs/chart-32b-8tp-phase3_20260319/
+
+# 4TP Phase 3（自动衔接）
+tail -30 logs/phase3_chart4tp_auto_20260319.log
+ls logs/chart-32b-4tp-phase3_20260319/   # 可能尚未创建
+```
+
+### 3. Phase 3 完成后执行分析出图
+Phase 3 全部完成后，用 `qps-sweep-comparison` Skill 分析两组结果：
+```bash
+# 8TP
+python3 scripts/analysis/compare_analysis.py \
+  --dirs logs/chart-32b-8tp-phase3_20260319 \
+  --ttfs-limit 1.5 --e2e-limit 150.0
+
+# 4TP
+python3 scripts/analysis/compare_analysis.py \
+  --dirs logs/chart-32b-4tp-phase3_20260319 \
+  --ttfs-limit 1.5 --e2e-limit 150.0
+```
+
+### 4. 预期最终结论（Phase 3 完成后写入 REPORT.md）
+
+| 部署 | max_rps_estimate | ideal_rps | 生产 RPM/实例 |
+|------|-----------------|-----------|-------------|
+| 8TP | 7.37 req/s | **7.61 req/s** | 40 RPM |
+| 4TP | 4.98 req/s | **≈4.2~4.3 req/s**（待确认）| 40 RPM |
+
+### 5. 待补充文档
+- `clingo/docs/ai_data/xinghan-chart-32b-v1-1-agent-data-structure.md`：补充 Agent 数据重构说明（41,320 条 Agent 调用如何通过 `process.py` 重建 messages）
+- `results/models/INDEX.yaml`：Phase 3 完成后更新 chart 模型的 `sla_max_qps_rps` 等字段
+- `results/models/xinghan-chart-32b-v1-1-agent/`：创建 model-context.md 和 REPORT.md
+

@@ -13,18 +13,25 @@ description: Use when building a benchmark dataset from raw business JSONL logs 
 
 ---
 
-## 两条路径
+## 三条路径
 
 ```dot
 digraph data_prep {
     "源数据类型?" [shape=diamond];
     "情况A: JSONL 线上日志" [shape=box];
     "情况B: CSV + 系统提示模板" [shape=box];
+    "情况C: AI-data 平台 downloaded 导出" [shape=box];
 
-    "源数据类型?" -> "情况A: JSONL 线上日志" [label="业务日志 JSONL"];
+    "源数据类型?" -> "情况A: JSONL 线上日志" [label="业务日志 JSONL（每行 dict）"];
     "源数据类型?" -> "情况B: CSV + 系统提示模板" [label="CSV(query列) + prompt模板"];
+    "源数据类型?" -> "情况C: AI-data 平台 downloaded 导出" [label="平台导出 JSONL（每行 list）"];
 }
 ```
+
+> **快速判断格式**：`head -c 2 file.jsonl`
+> - 输出 `{"` → 情况A（每行是 dict）
+> - 输出 `[{` → 情况C（每行是 list，AI-data 平台导出）
+> - 无 JSONL，有 CSV → 情况B
 
 ### 情况 A：JSONL 线上日志（6 步 + 步骤1.5）
 
@@ -76,6 +83,170 @@ CSV(query/times列) → [步骤1] times(ms) → income_time（Asia/Shanghai）
                                       ↓
                         [步骤6] README.md → 输出目录说明文档
 ```
+
+---
+
+### 情况 C：AI-data 平台 downloaded 导出格式（6 步，跳过 DataConverter 和 DataSampler）
+
+```
+downloaded JSONL（每行=list）→ [步骤1] 探查别名分布 → 确认 MODEL_LIST_SET
+                                         ↓
+                        [步骤1+1.5 合并] 直接 pandas 解析 → 日期分片 CSV + _all.csv（6列）
+                                         ↓
+                           [步骤2] pandas 直接过滤峰值窗口 → _selected_*.csv
+                                         ↓
+                           [步骤3] 时间戳拼接 → _stitched.csv（消除段间大间隔）
+                                         ↓
+                           [步骤4] DataInterpolator → _poisson_N_stitched.csv（放大 RPM）
+                                         ↓
+                           [步骤5] 脏数据过滤 → 覆盖写回
+                                         ↓
+                           [步骤6] README.md → 输出目录说明文档
+```
+
+> **⚠️ 不能使用 DataConverter 和 DataSampler**：
+> - DataConverter 要求每行是 dict（含 `messages` key），received list → `AttributeError: 'list' object has no attribute 'get'`
+> - DataSampler 依赖 DataConverter 生成的 `file_suffix` 索引列，情况C 的 CSV 不含此列 → 调用报错
+> - 情况C 全程用 pandas 直接操作，DataInterpolator 仍可正常使用
+
+#### 情况C：数据格式说明
+
+AI-data 平台 downloaded 导出的每行结构：
+```json
+[
+  {"role": "b",  "content": "用户消息", "time": 1768545951000, "_id": "...", ...},
+  {"role": "ib", "content": "内部八字数据", ...},
+  {"role": "a",  "content": "模型回复", "prompt": "[{\"role\":\"system\",...}]",
+   "extra_data": {"ai_info": {"model": "八字深度", "suffix": "八字深度"}}, "time": ...}
+]
+```
+
+| 字段 | 用途 | CSV 列 |
+|------|------|--------|
+| `role='b'.time`（ms）| 请求时间戳 | `income_time` |
+| `role='a'.prompt` | 完整 messages JSON（含 system+user）| `messages` |
+| `role='a'.content` | 模型历史回复 | `old_response` |
+| `role='b'._id` | 用户 ID | `user_id` |
+| `extra_data.ai_info.model` | 模型别名过滤字段 | — |
+
+#### 步骤0：探查别名分布（必做，避免数据丢失）
+
+```python
+import json
+from collections import Counter
+
+model_names = Counter()
+with open(JSONL_FILE) as f:
+    for line in f:
+        try:
+            msgs = json.loads(line.strip())
+            for msg in msgs:
+                if msg.get("role") == "a":
+                    ai_info = msg.get("extra_data", {}).get("ai_info", {})
+                    m = ai_info.get("model") or ai_info.get("suffix")
+                    if m:
+                        model_names[m] += 1
+        except:
+            pass
+
+print("模型别名分布:", model_names.most_common(10))
+# 将所有出现的别名都加入 MODEL_LIST_SET
+```
+
+#### 步骤1+1.5（合并）：直接解析 downloaded JSONL → 日期分片 CSV + _all.csv
+
+```python
+import json, datetime as dt_module
+import pandas as pd
+from pathlib import Path
+
+MODEL_LIST_SET = {"xinghan-xxx-model", "中文别名"}   # ← 由步骤0确认
+OUTPUT_COLS = ["income_time", "prompt", "messages", "old_response", "user_id", "line_num"]
+
+rows_by_day: dict[str, list] = {}
+
+with open(JSONL_FILE, encoding="utf-8") as jf:
+    for idx, raw in enumerate(jf):
+        line_num = idx + 1
+        try:
+            msgs = json.loads(raw.strip())
+            if not isinstance(msgs, list):
+                continue
+
+            # 找最后一条 role='a' 且模型别名匹配的消息
+            assistant_msg = None
+            for m in reversed(msgs):
+                if m.get("role") == "a" and m.get("prompt"):
+                    ai_info = m.get("extra_data", {}).get("ai_info", {})
+                    model_val = ai_info.get("model") or ai_info.get("suffix") or ""
+                    if model_val in MODEL_LIST_SET:
+                        assistant_msg = m
+                        break
+
+            if assistant_msg is None:
+                continue
+
+            # 找第一条 role='b' 取时间戳
+            user_msg = next((m for m in msgs if m.get("role") == "b"), None)
+            if not user_msg or not user_msg.get("time"):
+                continue
+
+            # ms → Asia/Shanghai datetime（去时区）
+            income_dt = dt_module.datetime.fromtimestamp(
+                user_msg["time"] / 1000,
+                tz=dt_module.timezone(dt_module.timedelta(hours=8))
+            ).replace(tzinfo=None)
+
+            rows_by_day.setdefault(income_dt.strftime("%Y-%m-%d"), []).append({
+                "income_time": income_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "prompt":      "",                              # benchmark 要求列存在，留空
+                "messages":    assistant_msg.get("prompt", ""),
+                "old_response": assistant_msg.get("content", "") or "",
+                "user_id":     user_msg.get("_id", ""),
+                "line_num":    line_num,
+            })
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
+
+# 写日期分片 CSV
+all_dfs = []
+for day_key in sorted(rows_by_day):
+    df_day = pd.DataFrame(rows_by_day[day_key], columns=OUTPUT_COLS)
+    df_day = df_day.sort_values("income_time").reset_index(drop=True)
+    day_csv = Path(OUTPUT_DIR) / f"{MODEL_NAME}_{day_key}.csv"
+    df_day.to_csv(day_csv, index=False)
+    all_dfs.append(df_day)
+
+# 写 _all.csv（6 列全量，已含 old_response，可直接用于 benchmark）
+df_full = pd.concat(all_dfs, ignore_index=True).sort_values("income_time").reset_index(drop=True)
+df_full.to_csv(Path(OUTPUT_DIR) / f"{MODEL_NAME}_all.csv", index=False)
+print(f"总行数: {len(df_full)}, old_response 非空率: {(df_full['old_response']!='').mean():.1%}")
+```
+
+#### 步骤2：pandas 直接过滤峰值窗口（替代 DataSampler）
+
+```python
+df_all = pd.concat([pd.read_csv(p) for p in sorted(
+    Path(OUTPUT_DIR).glob(f"{MODEL_NAME}_2[0-9][0-9][0-9]-*.csv")
+)], ignore_index=True)
+df_all["income_time"] = pd.to_datetime(df_all["income_time"])
+
+PEAK_WINDOWS = [
+    ("2026-01-16 00:00:00", "2026-01-16 00:20:00", "凌晨峰值"),
+    ("2026-01-16 22:49:00", "2026-01-16 23:09:00", "夜间峰值"),
+]
+
+sampled_frames = []
+for start_str, end_str, desc in PEAK_WINDOWS:
+    mask = (df_all["income_time"] >= start_str) & (df_all["income_time"] <= end_str)
+    df_win = df_all[mask].copy().reset_index(drop=True)
+    print(f"{desc}: {len(df_win)} 条, 峰值 RPM={df_win['income_time'].dt.floor('min').value_counts().max()}")
+    sampled_frames.append(df_win)
+
+df_combined = pd.concat(sampled_frames, ignore_index=True).sort_values("income_time").reset_index(drop=True)
+```
+
+步骤3~6 与情况A 完全相同，DataInterpolator 可正常使用。
 
 ---
 
@@ -238,7 +409,9 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 
 | 步骤 | 检查项 |
 |------|--------|
-| 转换后（步骤1） | 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
+| 格式判断（入口）| `head -c 2 file.jsonl` 确认是 `{"` (情况A) 还是 `[{` (情况C) |
+| 转换后（步骤1，情况A）| 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
+| 转换后（步骤1+1.5，情况C）| `_all.csv` 已是 6 列；`old_response` 非空率接近 100%；行数 ≥ 期望筛选量（若偏低，检查 MODEL_LIST_SET 是否漏别名）|
 | 合并后（步骤1.5） | **若执行**：`_all.csv` 列变为 6 列；`old_response` 非空率应接近 100%（DataConverter **不**自动提取模型回复，需在步骤1.5 手动从 JSONL 按 `line_num` 回填：`line_num = jsonl_row_index + 1`，提取 `messages[role='a'].content`）；行数与日期分片之和一致。**若跳过（纯采样路径）**：确认下一步为 DataSampler，且全流程中不直接使用 `_all.csv` |
 | 采样后 | 峰值 RPM 是否符合预期；各段起止时间 |
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
@@ -276,7 +449,9 @@ data-processor convert -i data.jsonl -o output/ -m "xinghan-hepan-72b-v1-2,星�
 
 | 错误 | 路径 | 根因 | 修复 |
 |------|------|------|------|
-| `_all.csv` 行数远少于 JSONL 行数 | A | `model_list` 未包含所有别名（如中文名）| 追加别名，重跑 convert |
+| `AttributeError: 'list' object has no attribute 'get'` | A | JSONL 每行是 list（情况C 格式），被误当情况A 处理 | 用 `head -c 2 file.jsonl` 检查格式；若是 `[{` 则切换到情况C 自定义解析 |
+| `KeyError: 'file_suffix'`（DataSampler 调用报错）| C | 情况C 的 CSV 不含 DataConverter 索引列 | 情况C 跳过 DataSampler，直接用 pandas 过滤峰值窗口（见情况C 步骤2）|
+| `_all.csv` 行数远少于 JSONL 行数 | A/C | `model_list` 未包含所有别名（如中文名）| 先运行别名探查（步骤0），追加别名后重跑 |
 | `TypeError: can only concatenate str (not "list")` | A | 多模态脏行未过滤 | 步骤5 过滤后再跑 benchmark |
 | 插值后仍有大间隔 | A | 拼接步骤被跳过 | 先拼接再插值 |
 | `sampler._select_data` 返回空 | A | `read_only_time` 与 converter 不一致 | 始终用 `False`；`True` 仅调试 |
@@ -305,7 +480,8 @@ grep -E "DATA_FORMAT|INPUT_JSONL|OUTPUT_DIR|MODEL_LIST|DATASET_PATH" \
 
 | 参数 | 枚举值 | 说明 |
 |------|--------|------|
-| `DATA_FORMAT` | `standard` | messages 内联 list（guoxue/ziwei 类型），走 DataConverter pipeline |
+| `DATA_FORMAT` | `standard` | messages 内联 dict-list（每行是 dict，guoxue/ziwei 早期版本），走 DataConverter pipeline |
+| `DATA_FORMAT` | `downloaded` | AI-data 平台 downloaded 导出格式（每行是 list），跳过 DataConverter/DataSampler，用情况C 自定义解析 |
 | `DATA_FORMAT` | `indexed` | messages 是 COS URL（chart 类型），先下载再转换 |
 | `INPUT_JSONL` | — | 原始索引/数据 JSONL 路径（相对 PROJECT_DIR）|
 | `OUTPUT_DIR` | — | 处理产物输出目录 |
@@ -338,6 +514,58 @@ grep "MODEL_LIST" configs/models/<model>/8tp.env
 > - `process.py` 先检查 `_downloaded_raw.jsonl` 是否已存在
 > - 已存在则**跳过下载**，直接执行转换（断点续传机制）
 > - 若下载不完整需重新下载，先删除 `_downloaded_raw.jsonl`
+
+---
+
+## ⚠️ indexed 格式：DataSampler 前置准备（回放专用）
+
+> **背景**：`indexed` 格式的 `process.py` 产出 `_full.csv`（所有流量，含 Agent 框架调用）和 `_all.csv`（仅直接 API 调用，6 列全量文件）。
+> DataSampler 的 `_select_data()` 需要 **3 列索引 `_all.csv`**（`income_time`, `file_suffix`, `original_index`）+ **日期分片 CSV**，在 indexed 格式下两者均缺失，**不能直接调用 DataSampler**。
+
+**正确做法**（回放数据准备时执行，QPS sweep 无需此步）：
+
+```python
+import pandas as pd, shutil
+from pathlib import Path
+
+MODEL_NAME = "xinghan-chart-32b-v1-1-agent"  # 替换为实际模型
+OUTPUT_DIR = Path("datas/output_chart")        # 替换为实际目录
+
+# ── 1. 读入 _full.csv（含所有流量，indexed 格式的完整数据源）────
+df = pd.read_csv(OUTPUT_DIR / f"{MODEL_NAME}_full.csv")
+df['income_time'] = pd.to_datetime(df['income_time'])
+df = df.sort_values('income_time').reset_index(drop=True)
+
+# ── 2. 按日期分片，创建 DataSampler 所需的日期分片 CSV ───────────
+df['date'] = df['income_time'].dt.strftime('%Y-%m-%d')
+index_rows = []
+for date, group in df.groupby('date'):
+    chunk = group.drop(columns='date').reset_index(drop=True)
+    chunk.to_csv(OUTPUT_DIR / f"{MODEL_NAME}_{date}.csv", index=False)
+    for orig_idx, row in chunk.iterrows():
+        index_rows.append({'income_time': str(row['income_time']),
+                           'file_suffix': date, 'original_index': orig_idx})
+
+# ── 3. 备份原 _all.csv，替换为 3 列索引版本 ─────────────────────
+all_csv = OUTPUT_DIR / f"{MODEL_NAME}_all.csv"
+backup  = OUTPUT_DIR / f"{MODEL_NAME}_all_direct_api_backup.csv"
+shutil.copy(str(all_csv), str(backup))                   # 备份 6 列版本
+
+pd.DataFrame(index_rows).to_csv(all_csv, index=False)    # 替换为 3 列索引版
+print(f"已备份 → {backup.name}，已写入 3 列索引 _all.csv ({len(index_rows)} 行)")
+
+# ── 4. 现在可以正常调用 DataSampler._select_data(start, end) ────
+
+# ── 5. DataSampler 完成后，恢复 _all.csv ───────────────────────
+# shutil.copy(str(backup), str(all_csv))  # 取消注释执行还原
+```
+
+> **为什么用 `_full.csv` 而非 `_all.csv`**：`indexed` 格式的 `_all.csv` 只有直接 API 调用（约 13% 流量），峰值仅 8 RPM；`_full.csv` 包含 Agent/MCP 框架调用，代表全量流量（峰值 34 RPM），才是回放的正确数据源。
+
+| 文件 | 内容 | 回放是否使用 |
+|------|------|-------------|
+| `_all.csv`（6 列版本）| 仅直接 API 调用 | ❌ 峰值偏低，不代表全量流量 |
+| `_full.csv` | 所有流量（含 Agent 框架）| ✅ 正确数据源，需转为 3 列后给 DataSampler |
 
 ---
 

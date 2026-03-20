@@ -44,6 +44,7 @@ Step 7  生成综合评估报告                  → model-eval-report Skill
 | 可用 GPU | 数量、卡号、互联方式（NVLink/PCIe） | `nvidia-smi topo -m` |
 | TP 配置建议 | NVLink → TP=N；PCIe L20 → TP=1×DP=N | 根据拓扑判断 |
 | 业务数据 | JSONL 日志路径（`/mnt/ai-infra/datasets/`）或无 | 业务方 |
+| **业务峰值 RPM（多通道）** | stream RPM + MCP/Agent RPM 之和；⚠️ 仅看裸模型监控会漏计 MCP 流量 | Grafana 确认 |
 | 平台服务 URL | k8s 部署后的 endpoint | 平台部署后获取 |
 | 业务联系人 | 算法负责人，用于确认模型用途 | 迁移清单 |
 
@@ -247,13 +248,21 @@ baseline_latency_s: <首次响应秒数>
 
 ### 5.1 选择测试策略
 
-> **推荐**：有业务数据时先跑回放、再跑 QPS 扫描，分别调用对应 Skill。
+> **推荐**：有业务数据时先跑回放验证 SLA，再用 **qps-peak-finder（首选）** 精确定位拐点。
 
 | 策略 | Skill | 适用场景 |
 |------|-------|----------|
-| 峰值回放测试 | `llm-replay-benchmark` Skill | 有业务数据时，验证真实流量下成功率/延迟 SLA |
-| QPS 拐点扫描 | `qps-benchmark-sweep` Skill | 找最大承载 QPS（后台执行，耗时数小时）|
-| 无业务数据 | 仅 `qps-benchmark-sweep` | 以全量数据集扫描替代 |
+| 峰值回放测试 | `llm-replay-benchmark` Skill | 有业务数据时，验证真实流量下 SLA（先于 QPS 扫描执行）|
+| **QPS 精确逼近（首选）** | **`qps-peak-finder` Skill** | **拐点未知的新模型**；三阶段自动收敛（总档位仅 10~15 档，耗时约 1/3）|
+| QPS 均匀扫描（备选）| `qps-benchmark-sweep` Skill | 已有历史数据或大致知道拐点范围时使用 |
+| 无业务数据 | 仅 QPS 扫描（任一路径）| 以全量数据集扫描替代 |
+
+> **qps-peak-finder 三阶段说明**：
+> - Phase 1：饱和探测（并发递增，找硬件上限）
+> - Phase 2：自适应二分逼近（精确收敛 ideal_rps，SLA 合规上限）
+> - Phase 3：生产档验证网格（4 档覆盖 production_rps ~ ideal_rps）
+>
+> 分析产出使用 `qps-peak-finder-analysis` Skill（Step 6 对应）。
 
 ### 5.2 关键参数
 

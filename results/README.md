@@ -24,9 +24,13 @@
 | [xinghan-guoxue-72b-v1-2-reason_qps_sweep_20260316](#xinghan-guoxue-72b-v1-2-reason_qps_sweep_20260316) | guoxue-72b-reason | QPS 拐点扫描 | 拐点 0.245 req/s（14.7 RPM），E2E 主约束，无回放测试 | 2026-03-16 |
 | [guoxue_qps_sweep_20260317](#guoxue_qps_sweep_20260317) | guoxue-72b-reason | QPS 拐点扫描（完整版）| 拐点 0.245 req/s，推荐 4 实例×8TP=32 卡 L20 | 2026-03-17 |
 | [guoxue_qps_peak_finder_20260318](#guoxue_qps_peak_finder_20260318) | guoxue-72b-reason | qps-peak-finder（Phase1+2+3）| 精确边界 0.2494 req/s，与网格搜索偏差 1.8%，用时 1/3 | 2026-03-18 |
+| [tianji-querysafety_peak_finder_20260319](#tianji-querysafety_peak_finder_20260319) | tianji-querysafety-4b-v2-3 | qps-peak-finder（bakv1 新版）| ⚠️ 生产档验证✅，8实例余量仅2.6%，建议扩9实例 | 2026-03-19 |
+| [ziwei-32b_peak_finder_20260319](#ziwei-32b_peak_finder_20260319) | ziwei-32b-v1 | qps-peak-finder（8TP 复验）| ❌ 生产 100RPM > SLA上限 95.4RPM，建议扩至 2×8TP | 2026-03-19 |
 | [lingyu_qps_sweep_20260317](#lingyu_qps_sweep_20260317) | lingyu-235b-A22b-v9 | QPS 拐点扫描 | 软拐点 2.0 req/s，全档 SLA 通过至 3.0 req/s，无回放测试 | 2026-03-17 |
-| [chart-32b-8tp_qps_20260318](#chart-32b-8tp_qps_20260318) *(进行中)* | chart-32b-agent | QPS 拐点扫描（8TP）| 🔄 进行中，预计完成 2026-03-19 | 2026-03-18 |
-| [chart-32b-4tp_qps_20260318](#chart-32b-4tp_qps_20260318) *(进行中)* | chart-32b-agent | QPS 拐点扫描（4TP 对照）| 🔄 进行中，预计完成 2026-03-19 | 2026-03-18 |
+| [chart-32b-8tp_qps_20260318](#chart-32b-8tp_qps_20260318) *(已归档)* | chart-32b-agent | QPS 拐点扫描（8TP，早期）| 已被 peak-finder 替代 | 2026-03-18 |
+| [chart-32b-4tp_qps_20260318](#chart-32b-4tp_qps_20260318) *(已归档)* | chart-32b-agent | QPS 拐点扫描（4TP，早期）| 已被 peak-finder 替代 | 2026-03-18 |
+| [chart-32b_peak_finder_20260319](#chart-32b_peak_finder_20260319) | chart-32b-agent | qps-peak-finder（8TP vs 4TP，Phase1+2+3）| 8TP ideal 7.61 req/s / 4TP ideal 4.19 req/s，单实例均可覆盖生产 118 RPM | 2026-03-19 |
+| [chart-32b_replay_20260320](#chart-32b_replay_20260320) | chart-32b-agent | 峰值回放（118 RPM，3实例×8TP）| ⚠️ 成功率 99.19%，TTFT P90=0.135s，E2E P90=6.81s，QPS容量11×余量 | 2026-03-20 |
 
 ---
 
@@ -250,6 +254,81 @@
 
 **主要文件**（完成后更新）：
 - `REPORT.md` — QPS 对照报告
+
+---
+
+### tianji-querysafety_peak_finder_20260319
+
+**模型**：`tianji-querysafety-4b-v2-3`（安全拦截分类模型，4TP bakv1）  
+**方法**：qps-peak-finder 三阶段（Phase 1 + Phase 2 完成，Phase 3 进行中）  
+**部署**：4TP×1实例（L20 GPU × 4），线上 8 实例  
+
+**关键结论**：
+- ideal_rps = **7.8554 req/s（471 RPM/实例）**，Phase 2 bracket [7.8554, 8.0609] 宽 2.5%
+- 极限 RPS = 52.59 req/s，server 承载并发 ≈ 18（Little's Law）
+- Phase 3 生产档 7.47 req/s 验证：✅ E2E P90 = 268ms，SLA 合规
+- ⚠️ **8 实例余量仅 2.6%**（容量 3677 RPM vs 生产峰值 3584 RPM），建议扩至 **9 实例（余量 14%）**
+- Phase 3 剩余 2 档（qps7.7269 + qps7.8554）后台运行中，图表待更新
+
+**报告**：`results/tianji-querysafety_peak_finder_20260319/REPORT.md`
+
+---
+
+### ziwei-32b_peak_finder_20260319
+
+**模型**：`xinghan-ziwei-32b-v1`（32B 对话模型，8TP 复验）  
+**方法**：qps-peak-finder 三阶段  
+**部署**：8TP×1实例（L20 GPU × 8）
+
+**关键结论**：
+- ideal_rps = **1.5902 req/s**（95.4 RPM），bracket [1.5902, 1.6179] 宽 1.7%
+- 极限 RPS = 2.09 req/s，server 峰值承载并发 ≈ 60（Little's Law）
+- ❌ **生产 100 RPM（1.667 req/s）> SLA 上限 95.4 RPM**，峰值 TTFS P90 = 1783ms，超限 19%
+- 历史网格搜索（1.50 req/s）vs peak-finder（1.5902 req/s）：精度提升 +6%，结论一致
+- 建议：**2×8TP 实例**（16 卡 L20，联合承载 ~191 RPM，有 91% 余量）
+
+**报告**：`results/ziwei-32b_peak_finder_20260319/REPORT.md`
+
+---
+
+### chart-32b_peak_finder_20260319
+
+**模型**：`xinghan-chart-32b-v1-1-agent`（32B 星盘普通场景）  
+**方法**：qps-peak-finder 三阶段（Phase1 饱和探测 / Phase2 自适应逼近 / Phase3 验证网格）  
+**部署对比**：8TP×1实例 vs 4TP×1实例（L20 GPU）  
+**数据集**：`xinghan-chart-32b-v1-1-agent_full.csv`
+
+**关键结论**：
+- 8TP ideal_rps = **7.61 req/s**（457 RPM），极限 RPS = 7.37 req/s，server并发极限 ≈ 272
+- 4TP ideal_rps = **4.19 req/s**（252 RPM），极限 RPS = 4.98 req/s，server并发极限 ≈ 247
+- 8TP/4TP 承载比 = **1.82×**（GPU 2×，效率 91%）
+- SLA 拐点均由 TTFS P90 触发（prefill侧）；E2E P90 距上限 5.5× 裕量
+- 生产峰值 118 RPM，**单 4TP 实例即可覆盖（213% 裕量）**
+- ⚠️ Agent 框架调用（41,320条）未纳入测试，建议补充回放验证
+
+**报告**：`results/chart-32b_peak_finder_20260319/REPORT.md`  
+**图表**：`results/chart-32b_peak_finder_20260319/plot_latency_2d.html`
+
+---
+
+---
+
+### chart-32b_replay_20260320
+
+**模型**：`xinghan-chart-32b-v1-1-agent`（星盘占星 Agent 调用）  
+**实验类型**：峰值回放验证（118 RPM，3 实例 × 8TP × L20）  
+**测试时间**：2026-03-20 14:52 → 16:43（约 110 分钟）
+
+**关键结论**：
+- 成功率：**99.19%**（5,826 请求，47 条失败，主为超时；宽松标准通过，严格 99.9% 略低）
+- TTFT P90：**0.135 s**（SLA ≤ 1.5s，余量 91%）
+- TTFS P90：**0.442 s**（SLA ≤ 1.5s，余量 71%）
+- E2E P90：**6.811 s**（SLA ≤ 150s，余量充足）
+- 单实例均摊 ~39 RPM，**QPS 容量 11× 余量**（距 ideal_rps 457 RPM 极宽裕）
+- ⚠️ indexed 格式数据需先分片+建 3 列索引 _all.csv 才能使用 DataSampler（已记录 SKILL.md）
+
+**报告**：`results/chart-32b_replay_20260320/REPORT.md`  
+**分析图**：`results/chart-32b_replay_20260320/chart-32b-8tp_replay_118rpm_analysis.html`
 
 ---
 

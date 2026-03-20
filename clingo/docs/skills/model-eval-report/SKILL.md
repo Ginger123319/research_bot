@@ -63,6 +63,10 @@ model_type / usage_scenario / business_peak_rpm / dataset_path / endpoint_url / 
 # 测试结论字段
 replay_success_rate / replay_ttft_p90_s / replay_e2e_p90_s
 sla_max_qps / sla_threshold / inflection_type
+
+# peak-finder 专属字段（可选，qps-peak-finder-analysis 写入时才存在）
+extreme_rps                   # Phase 1 饱和档 max_rps_estimate（硬件上限）
+server_concurrency_at_extreme # Little's Law 估算的服务端极限承载并发数
 ```
 
 **缺失字段处理**：
@@ -174,6 +178,14 @@ GPU 总数        = 推荐实例数 × tp_size
 
 > 多组对比（如 TP vs DP）：此处填最优配置结论，对比详情见实验数据索引。
 
+<!-- 以下仅当 extreme_rps 字段存在时展示（qps-peak-finder-analysis 流程产出） -->
+**硬件上限参考**（peak-finder 流程时补充，字段不存在则省略此块）：
+
+| 指标 | 值 | 说明 |
+|------|-----|------|
+| 极限 RPS | <extreme_rps> req/s | Phase 1 饱和测试上限，不可持续运行 |
+| 服务端承载并发（极限）| <server_concurrency_at_extreme> | Little's Law 估算（λ × mean_E2E）|
+
 ### 5. 实验数据索引
 
 | 实验目录 | 类型 | 关键结论 |
@@ -187,11 +199,34 @@ GPU 总数        = 推荐实例数 × tp_size
 
 ## Step 6：更新索引
 
-在 `results/README.md` 的"快速导航"部分确认已有指向 `results/models/` 的链接，若无则添加：
+### 6a. results/README.md 快速导航
+
+确认已有指向 `results/models/` 的链接，若无则添加：
 
 ```markdown
 - 模型评估报告 → [`results/models/`](models/)
 ```
+
+### 6b. results/models/INDEX.yaml — 收尾字段（本 Skill 的专属职责）
+
+`model-eval-report` 是最终环节，负责将评估状态标记为"已完成"并写入最终上线建议。
+其他字段（replay_*、sla_max_qps_*、saturation_*）已由上游 Skill 写入，此处**不覆盖**。
+
+```yaml
+# 找到对应模型条目，仅更新以下字段：
+eval_status: completed
+eval_completed_date: "YYYY-MM-DD"
+recommendation: "<单句上线建议，含实例数 × GPU规格>"
+
+# ─── 字段来源说明 ─────────────────────────────────────────────────────
+# eval_status / eval_completed_date / recommendation  ← 本 Skill 负责
+# performance.replay_*                               ← benchmark-result-analysis 负责
+# performance.sla_max_qps_* / saturation_* / extreme_* ← qps-peak-finder-analysis 负责
+#                                                       （或 qps-sweep-comparison 路径A）
+# ─────────────────────────────────────────────────────────────────────
+```
+
+> 若模型无回放测试，`replay_*` 字段可缺失；若使用传统 sweep（路径A），则无 `saturation_*` 字段。两种情况下本 Skill 的写入职责不变。
 
 ---
 

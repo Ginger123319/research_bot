@@ -40,13 +40,49 @@ description: Use when onboarding a new LLM model with unknown QPS capacity — f
 ```
 
 产出：
-- `avg_output_len`（tokens）← 换算 max_rps_estimate 的分母
+- `avg_output_len`（tokens）← 换算 max_rps_estimate 的分母，**也是 DURATION / COOLDOWN 自动推算的输入**
 - P50/P90/P99 输出长度分布（作为参考）
 
 > **依赖**：数据集 `old_response` 列必须非空（见前置条件）。
 > 若 `old_response` 全为空，Phase 0 会报 `KeyError`；先按 `traffic-dataset-prep` SKILL 步骤1.5 修复数据集。
 >
 > **模型参考文档**：每个模型的数据链路细节、`old_response` 回填方法及 Phase 0 输出示例见 `clingo/docs/ai_data/<model>-data-structure.md`。
+
+---
+
+## Phase 0 产出：DURATION / COOLDOWN 自动推算
+
+> **使用时机**：用户未明确指定固定时长时，使用下面公式自动计算 Phase 2 / Phase 3 参数。若用户已明确指定（如"每档跑 1 小时"），则按指定值执行，不使用公式。
+
+```python
+# Phase 0 产出的 avg_output_len（tokens）
+avg_output_len = <Phase 0 输出>
+
+# Phase 2 每档时长：确保系统达到稳态 + 收集足够样本
+DURATION_SECS = max(1200, int(avg_output_len * 2.5))
+# 示例: avg=1386 → 3465s ≈ 1h；avg=500 → 1250s ≈ 21min；avg=200 → 1200s（下限）
+
+# 档位间冷却：确保在途请求充分排空，避免测试污染
+COOLDOWN_SECS = max(60, int(avg_output_len / 2))
+# 示例: avg=1386 → 693s ≈ 12min；avg=300 → 150s；avg=100 → 60s（下限）
+```
+
+> **⚠️ 测试污染警告（长输出推理模型）**：
+>
+> 当模型的 E2E 延迟较长（P90 > 60s）时，冷却时间不足会导致上一档的在途请求挤入下一档测试窗口，造成以下现象：
+> - 低 QPS 档位比高 QPS 档位延迟更高（违反直觉的"倒挂"）
+> - bracket 搜索错误地将本该通过的 QPS 标记为 FAIL（HI 被人为压低）
+> - Phase 2 需要极多轮才能收敛，甚至永不收敛
+>
+> **判断方法**：若出现"低 RPS 比上一档更差"的连续 FAIL，或 bracket HI 单调递减，应立即怀疑测试污染。  
+> **应对**：终止当前 Phase 2，等待服务完全空闲（监控 active_requests=0），用更大的 COOLDOWN/DURATION 重新启动。
+
+| `avg_output_len` 范围 | 模型类型参考 | 推荐 DURATION | 推荐 COOLDOWN |
+|----------------------|------------|--------------|--------------|
+| < 200 tokens | 分类器 / 安全过滤 | 1200s（默认下限）| 60s |
+| 200~500 tokens | 普通对话 | ~1200~1250s | 100~250s |
+| 500~1500 tokens | 中等推理 | ~1250~3750s | 250~750s |
+| > 1500 tokens | 深度推理（如 guoxue-72b）| ≥ 3750s（建议 3600s=1h）| ≥ 750s（建议 900s=15min）|
 
 ---
 
@@ -145,9 +181,17 @@ Phase 2 起始 QPS        = max_rps_estimate × 1.2 = XX req/s
 ## Phase 2：自适应逼近
 
 **模式**：`--request-rate`（定速发压）  
-**每档时长**：1200s（20min）  
+**每档时长**：由 Phase 0 自动推算（`max(1200, int(avg_output_len × 2.5))`s），用户未指定时使用此公式；用户已指定则按指定值  
 **起始 QPS**：`max_rps_estimate × 1.2`  
-**初始步长**：`max_rps_estimate × 10%`
+**初始步长**：`max_rps_estimate × 10%`  
+**档位间冷却**：由 Phase 0 自动推算（`max(60, int(avg_output_len / 2))`s），用户未指定时使用此公式
+
+> **⚠️ `production_rps` 配置陷阱**：
+> `production_rps` 应为上线 Grafana 的实测 RPM ÷ 60（**实际服务速率**），
+> **不是** Poisson 插值时设置的 `TARGET_PEAK_RPM`（那是数据集的目标峰值 RPM，与服务实际承载量无关）。
+> 例如：`TARGET_PEAK_RPM=256` 不等于 `PRODUCTION_RPS=4.27`——若模型实际产线 RPS 很低（如 0.05），
+> 误用 4.27 作为 `production_rps` 会导致 bracket 搜索过早以 4.27 托底，错误地终止收敛。
+> 若 production_rps 未知，设为一个安全的小值（如 `0.05`）作为搜索下限，而非从 RPM 换算。
 
 ### 执行（单档模板）
 
@@ -169,6 +213,7 @@ bash "${BENCHMARK_SCRIPT}" \
     --max-completion-tokens "${MAX_COMPLETION_TOKENS}" \
     || echo "⚠️ rps=${PROBE_QPS} 异常，记录后继续"
 
+# COOLDOWN_SECS 由 Phase 0 自动推算（或用户指定）；默认值 60 仅适用于短输出模型
 sleep ${COOLDOWN_SECS:-60}
 ```
 
@@ -252,8 +297,8 @@ sleep ${COOLDOWN_SECS:-60}
 
 **前提**：已知 `production_rps`（上线 Grafana RPM ÷ 60）和 `ideal_rps`（Phase 2 输出）  
 **档位**：`np.linspace(production_rps, ideal_rps, 4)`  
-**每档时长**：2700s（45min，比 Phase 2 长，提供更稳定的曲线样本）  
-**档位间冷却**：60~90s
+**每档时长**：与 Phase 2 相同（Phase 0 自动推算或用户指定），目标提供比 Phase 2 更稳定的曲线样本  
+**档位间冷却**：与 Phase 2 相同（Phase 0 自动推算或用户指定）
 
 ```bash
 OUTPUT_DIR="logs/${MODEL}_phase3_grid_$(date +%Y%m%d)"
@@ -261,7 +306,7 @@ OUTPUT_DIR="logs/${MODEL}_phase3_grid_$(date +%Y%m%d)"
 for QPS in ${LEVEL_1} ${LEVEL_2} ${LEVEL_3} ${LEVEL_4}; do
     LEVEL_DIR="${OUTPUT_DIR}/qps_${QPS}"
     mkdir -p "${LEVEL_DIR}"
-    NUM_PROMPTS=$(echo "$QPS * 2700" | bc | awk '{print int($1)+1}')
+    NUM_PROMPTS=$(echo "$QPS * ${DURATION_SECS}" | bc | awk '{print int($1)+1}')
 
     TARGET_MODEL="${TARGET_MODEL}" \
     TOKENIZER="${TOKENIZER}" \
@@ -275,6 +320,7 @@ for QPS in ${LEVEL_1} ${LEVEL_2} ${LEVEL_3} ${LEVEL_4}; do
         --max-completion-tokens "${MAX_COMPLETION_TOKENS}" \
         || echo "⚠️ QPS=${QPS} 异常，记录后继续"
 
+    # COOLDOWN_SECS 由 Phase 0 自动推算（或用户指定）；默认值 60 仅适用于短输出模型
     sleep ${COOLDOWN_SECS:-60}
 done
 ```
@@ -313,3 +359,5 @@ Phase 3 完成后，先用 `analyze_peak_finder.py --phase 3` 快速汇总 SLA �
 | Phase 2 找不到 SLA 超标点 | 模型性能很好，SLA 从未触发 | 继续向上探直到 `extreme_rps`，`ideal_rps = extreme_rps` |
 | production_rps 未知 | 没有上线 Grafana 数据 | Phase 3 起始点改为 `ideal_rps × 0.5` |
 | Phase 2 bracket Pass 后下一档 RPS 反而更低 | auto 脚本复用了 analyze 用旧 bracket 预算的 `[NEXT_RPS]`，LO 已更新但 next_rps 未重算 | bracket 更新后在 shell 层重新计算几何中点（见上方⚠️陷阱），不复用 analyze 打印值 |
+| Phase 2 低 QPS 反而比高 QPS 延迟更高（"倒挂"）| 冷却不足导致测试污染：上一档在途请求堆积进入下一档测试窗口 | 终止测试等服务完全空闲，使用 Phase 0 自动推算的 `COOLDOWN_SECS`（≥ `avg_output_len / 2`s）重新启动 |
+| `PRODUCTION_RPS` 设为 `TARGET_PEAK_RPM / 60`（如 4.27）导致 bracket 过早收敛 | 混淆"数据集目标 RPM"与"服务实际 RPS"：Poisson 插值目标 RPM 是数据集制备参数，不代表模型实际能承载的 RPS | `production_rps` 取 Grafana 实测 RPM ÷ 60；未知时设保守小值（如 0.05）作为搜索下限 |

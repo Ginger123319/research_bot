@@ -68,6 +68,7 @@ ls results/models/<model>/EVAL_REPORT.md  # Step 7 产物
 | &nbsp;&nbsp;形态 B：Dockerfile（含 ENTRYPOINT 启动命令）| — | — |
 | GPU 状态 | `nvidia-smi` 主动检查，无需用户提供 | ✅ |
 | 业务数据路径 | 用户提供，或明确"目前无数据" | ✅ |
+| **业务峰值 RPM（多通道）** | 见下方⚠️校验步骤 | ✅ |
 | 业务推理参数 | 算法人员提供（可选）| ⬜ |
 | 远端 endpoint URL | **阶段二再要，此步不需要** | ⏳ |
 
@@ -92,6 +93,24 @@ ls results/models/<model>/EVAL_REPORT.md  # Step 7 产物
 > ```
 >
 > 形态 B 示例（tianji）：提供 Dockerfile，从 ENTRYPOINT 解析所有参数。
+
+**⚠️ 业务峰值 RPM 多通道校验（必做，影响最终实例数）**：
+
+Grafana 裸模型监控（`model="<model-name>"`）**只统计直接 API 调用**，MCP 工具链和 Agent 框架的转发流量**不在裸模型指标中**，可能远大于裸模型峰值。
+
+```
+校验步骤：
+1. Grafana 裸模型监控 → 获取 stream 峰值 RPM
+2. 询问业务方：是否有 MCP/Agent 框架也调用此模型？
+   若有 → 查 Grafana MCP 监控，获取各 MCP 工具的峰值 RPM
+3. business_peak_rpm = stream_rpm + mcp_rpm（所有通道之和）
+```
+
+| 场景 | 后果 |
+|------|------|
+| 仅看裸模型峰值（43 RPM），漏统 MCP（213 RPM） | 实例建议少 5×（4 实例 → 实际需 20 实例）|
+
+若无法确认 MCP 通道，在 `model-context.md` 中标注 `business_peak_rpm_source: "待核实（仅stream口径）"`，不用该值计算最终实例规模。
 
 **GPU 拓扑自动判断**（`nvidia-smi topo -m`）：
 
@@ -118,6 +137,7 @@ Step 5 benchmark 执行时透传，确保测试条件对齐业务真实调用。
 - GPU：<ids>，拓扑：PCIe / NVLink
 - 业务数据：有（<路径>）/ 无
 - 推理参数：<json 或 "未提供">
+- 业务峰值：stream=<n> RPM + MCP=<n> RPM = 合计 <N> RPM（来源：Grafana 已确认/待核实）
 ```
 
 **model-context.md 初始化**（写入 `results/models/<model-name>/model-context.md`，目录不存在则创建）：
@@ -307,13 +327,22 @@ ls logs/<model>_*_replay_*/    # 回放结果已存在 → 跳过回放
 ls logs/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
 ```
 
+**QPS 扫描路径选择（二选一）**：
+
+| 路径 | 适用场景 | Skill |
+|------|---------|-------|
+| **路径 A**：均匀/密度加权扫描 | 已有历史数据或大致知道拐点范围 | `qps-benchmark-sweep` Skill |
+| **路径 B**：三阶段自动逼近 | 拐点完全未知的新模型首次接入 | `qps-peak-finder` Skill |
+
+路径 B 优点：总档位更少（通常 10~15 档 vs 20~30 档），耗时减少约 2/3；需要 `production_rps` 作为 Phase 3 起点。
+
 **执行顺序**（有业务数据时）：
-1. 先跑 `qps-benchmark-sweep` Skill —— QPS 拐点扫描，确认最大稳定 QPS
-2. sweep 完成后，若需验证真实流量形态，再跑 `llm-replay-benchmark` Skill
+1. 先跑 QPS 扫描（路径 A 或 B）—— 确认最大稳定 QPS
+2. sweep/peak-finder 完成后，若需验证真实流量形态，再跑 `llm-replay-benchmark` Skill
 
-无业务数据时：仅跑 `qps-benchmark-sweep`。
+无业务数据时：仅跑 QPS 扫描（路径 A）。
 
-**新模式（推荐）**：通过 `.env` 配置文件驱动通用脚本
+**路径 A 执行（新模式，推荐）**：通过 `.env` 配置文件驱动通用脚本
 
 ```bash
 # QPS sweep（并行启动两组部署对照）
@@ -331,11 +360,13 @@ nohup bash scripts/benchmark/run_replay.sh \
     > logs/data-pipeline/<model>_8tp_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 ```
 
-**旧模式（历史参考）**：
+**路径 A 旧模式（历史参考）**：
 ```bash
 nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
     > logs/data-pipeline/<model>_qps_$(date +%Y%m%d_%H%M%S).log 2>&1 &
 ```
+
+**路径 B 执行**：参考 `qps-peak-finder` Skill，自动完成 Phase 1（饱和探测）→ Phase 2（自适应逼近）→ Phase 3（验证网格）
 
 > ⚠️ QPS 扫描耗时长（数小时），启动后告知用户预估时间并 `nohup` 后台执行，不阻塞会话。  
 > nohup 重定向路径统一写入 `logs/data-pipeline/`。
@@ -344,11 +375,11 @@ nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
 ```markdown
 ### Step 5 🔄 Benchmark 执行中（YYYY-MM-DD 启动）
 - 回放测试：✅ 成功率 <n>%，TTFT P90 <x>s，E2E P90 <x>s
-- QPS 扫描：🔄 进行中（<档位范围>，预计 <时长>）
+- QPS 扫描：🔄 进行中（路径A/B，<档位范围>，预计 <时长>）
 → 扫描完成后更新为：
 ### Step 5 ✅ Benchmark 完成（YYYY-MM-DD）
 - 拐点 QPS：~<x> req/s（TTFS P90 ≤ 1.5s 基准）
-- 日志目录：logs/<model>_*_qps_*_all/
+- 日志目录：logs/<model>_*_qps_*_all/ 或 logs/<model>-*-phase3_*/
 ```
 
 **model-context.md 追加**（回放完成后）：
@@ -367,9 +398,16 @@ replay_e2e_p90_s: <x>
 ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
 ```
 
-**调用**：
-- `benchmark-result-analysis` Skill → 回放结果离线分析（HTML + PNG + REPORT 骨架）
-- `qps-sweep-comparison` Skill → QPS 多组对比（拐点图 + SLA 评估）
+**调用（与 Step 5 路径对应）**：
+
+| Step 5 路径 | 分析 Skill |
+|------------|-----------|
+| 路径 A（qps-benchmark-sweep）| `benchmark-result-analysis` + `qps-sweep-comparison` |
+| 路径 B（qps-peak-finder）| `benchmark-result-analysis` + **`qps-peak-finder-analysis`** |
+
+- `benchmark-result-analysis` Skill → 回放结果离线分析（HTML + PNG + REPORT 骨架，有回放时）
+- `qps-sweep-comparison` Skill → 路径 A：QPS 多组对比（拐点图 + SLA 评估）
+- `qps-peak-finder-analysis` Skill → 路径 B：Phase 2+3 合并 + Little's Law 估算 + 三锚点 REPORT
 
 **产物验证**：`results/<model>_<date>/REPORT.md` 核心指标已填写
 
@@ -378,7 +416,7 @@ ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
 ### Step 6 ✅ 分析归档（YYYY-MM-DD）
 - 报告路径：results/<model>_<date>/REPORT.md
 - 关键结论：
-  拐点 QPS：<x> req/s
+  拐点 QPS / ideal_rps：<x> req/s
   回放成功率：<n>%
   TTFT P90：<x>s / TTFS P90：<x>s
 ```
@@ -388,6 +426,9 @@ ls results/<model>_*/REPORT.md  # 报告已存在且完整 → 跳过
 sla_max_qps: <x>
 sla_threshold: "<模型特定 SLA 门限描述，如 E2E P95 ≤ 400ms>"
 inflection_type: <软拐点 / 硬拐点，及触发指标说明>
+# 路径 B（peak-finder）时额外追加：
+extreme_rps: <x>
+server_concurrency_at_extreme: <n>
 ```
 
 ---

@@ -3594,3 +3594,294 @@ df, err = load_exp_csv("vanilla_qps2.000.csv")
 | `/api/models/xinghan-guoxue-72b-v1-2-reason` 返回三个新字段 | ✅ |
 | Linter 无报错 | ✅ |
 | serve.py 重启成功（PID 549426）| ✅ |
+
+---
+
+## 2026-03-19 会话记录 — xinghan-chart-32b-v1-1-agent QPS Peak Finder（Phase 2 收敛 + Phase 3 启动）
+
+### 📌 会话目标
+在 4TP / 8TP 两路并行下，完成 `xinghan-chart-32b-v1-1-agent` 的 `qps-peak-finder` Phase 2 自适应逼近，获取 `ideal_rps`，并启动 Phase 3 上线验证网格。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 🐛 修复 Phase 2 auto 脚本 Bug — bracket next_rps 错位计算
+**现象**：rps7.2423 通过后，下一档反而探 rps7.221（比通过档还低）。  
+**根因**：`analyze_phase2` 被调用时接收旧 bracket `[LO, HI]`，基于旧值算出 `[NEXT_RPS=7.2211]` 并打印；shell 随后更新 LO→7.2423，但已提取的 NEXT_RPS 是旧中点，造成错位。  
+**修复**：在 bracket 更新后于 shell 层重新计算几何中点，不复用 analyze 打印值：
+```bash
+NEXT_RPS=$(python3 -c "import math; print(f'{math.sqrt(float(\"${LO_RPS}\")*float(\"${HI_RPS}\")):.4f}')")
+```
+已同步更新 `run_phase2_auto_chart8tp.sh` 和 `run_phase2_auto_chart4tp.sh`。
+
+#### 2. 🐛 修复 Phase 2 auto 脚本 Bug — 过早收敛（bracket 宽 50% 时误判 CONVERGED）
+**现象**：4TP rps3.9851 通过后（TTFS=1474ms，距 SLA 上限仅 1.7%），analyze 输出 `[NEXT_RPS=CONVERGED]`（比例步进"裕量 < 5%"规则），旧脚本直接触发收敛，实际 bracket [3.9851, 5.9777] 宽 50%，`ideal_rps` 被严重低估为 3.985 req/s。  
+**根因**：旧代码直接从 analyze 输出读取 `[NEXT_RPS=CONVERGED]`，未校验 bracket 宽度；新代码虽有 bracket 宽度检查，但 4TP 进程已在修复前启动，运行的是旧代码（bash 进程缓冲旧版本脚本）。  
+**修复**：在 ELSE 分支（bracket 不完整时）加额外防护：检测到 `[NEXT_RPS=CONVERGED]` 时，若 `HI` 和 `LO` 均已建立且 bracket 宽度 ≥ 3%，忽略 CONVERGED 判断，强制继续 binary search：
+```bash
+if [[ -n "${HI_RPS}" && -n "${LO_RPS}" ]]; then
+    WIDTH=$(python3 -c "print('wide' if (float('${HI_RPS}')-float('${LO_RPS}'))/float('${LO_RPS}') >= 0.03 else 'narrow')")
+    if [[ "${WIDTH}" == "wide" ]]; then
+        NEXT_RPS=$(python3 -c "import math; ...")  # 重算几何中点
+    fi
+fi
+```
+
+#### 3. 📚 skill 文档夯实 — qps-peak-finder/SKILL.md
+在 "bracket 维护规则" 注释块新增 `⚠️ 实现陷阱：next_rps 必须在 bracket 更新后重新计算` 段落，详细说明问题根因、典型症状、正确写法。在 FAQ 表格补充两条对应记录。
+
+#### 4. ✅ 8TP Phase 2 收敛完成
+- **收敛档位**：bracket [7.6132, 7.8058]，宽 2.5% < 3% → 停止
+- **ideal_rps = 7.6132 req/s**（TTFS P90 = 1488ms ✅）
+- 完整探测轨迹（7档，含1档冗余）：
+
+| 档位 | TTFS P90 | SLA |
+|------|---------|-----|
+| rps8.844 | 3229ms | ❌ |
+| rps5.896 | 1065ms | ✅ |
+| rps7.242 | 1400ms | ✅ |
+| rps7.221 | 1416ms | ✅（冗余，bug 遗留）|
+| rps8.003 | 1665ms | ❌ |
+| rps7.613 | 1488ms | ✅ |
+| rps7.806 | 1567ms | ❌ → 收敛 |
+
+#### 5. 🟡 4TP Phase 2 续跑中（误判恢复）
+误判收敛后用 `INIT_LO=3.9851 INIT_HI=5.9777` 续跑，截至记录时已完成：
+
+| 档位 | TTFS P90 | SLA | bracket |
+|------|---------|-----|---------|
+| rps5.978 | 2824ms | ❌ | HI=5.978 |
+| rps3.985 | 1474ms | ✅ | LO=3.985 |
+| rps4.881 | 1659ms | ❌ | HI↓=4.881 |
+| rps4.410 | 1557ms | ❌ | HI↓=4.410 |
+| rps4.192 | 1461ms | ✅ | LO↑=4.192（进行中）|
+
+当前 bracket [4.192, 4.410]，宽 5.2%，预计还需 2 档收敛，`ideal_rps ≈ 4.19~4.30 req/s`。
+
+#### 6. 🟡 8TP Phase 3 已启动
+创建并启动 `run_phase3_grid_chart8tp.sh`，档位 `linspace(0.667, 7.6132, 4)` = **0.667 / 2.982 / 5.298 / 7.613 req/s**，每档 45min，顺序执行，预计 22:30 完成。
+
+#### 7. 🔧 4TP Phase 3 自动衔接脚本
+创建三个新脚本：
+- `run_phase3_grid_chart4tp.sh`：接受 `IDEAL_RPS` 环境变量，自动计算 4 档 linspace
+- `run_phase3_auto_chart4tp.sh`：每 30s 轮询 Phase 2 日志，检测 "Phase 2a 收敛完成" 关键字，提取 `ideal_rps` 后自动触发 Phase 3
+- 自动衔接进程已在后台运行（PID=783327）
+
+---
+
+### 🐛 遇到了哪些错误
+
+| 错误 | 根因 | 解决 |
+|------|------|------|
+| 8TP rps7.242 Pass 后下一档探 rps7.221（低于通过档）| analyze 用旧 bracket 算 next_rps，shell 更新 LO 后未重算 | bracket 更新后在 shell 层重新计算几何中点 |
+| 4TP rps3.985 通过但脚本误判"收敛"（ideal_rps=3.985 严重低估）| 旧代码直接读 `[NEXT_RPS=CONVERGED]`；进程已缓冲旧脚本版本 | 加 bracket 宽度防护；手动续跑 `INIT_LO/INIT_HI` |
+| 8TP rps8.003 和 rps7.6132 各被分析两次（checkpoint 重复写入）| break 失败（bash set-e 与 for 循环 break 的 stderr 交互），loop 多走一轮 | 无功能影响，结果正确；后续可将 for→while 优化 |
+| Phase 3 第一版脚本调用 `example_llm_benchmark_test.sh` 报 Not Found | 路径错误，应使用 `python -m llm_benchmark.benchmark.benchmark` | 改写 Phase 3 脚本，复用 Phase 2 probe 的直接调用方式 |
+
+---
+
+### 🎯 技术决策
+
+| 决策 | 选择 | 理由 |
+|------|------|------|
+| Phase 2 auto 收敛终止条件 | 仅在 shell 层用 bracket 宽度 < 3% 判断，不信任 analyze 的 CONVERGED 输出 | analyze 无法感知 bracket 是否已经从旧值更新，权威判断必须在 shell 层 |
+| Phase 3 production_rps 起点 | 0.667 req/s（120 RPM ÷ 3 实例 ÷ 60）| 用户确认：3 套实例负载均衡均摊，单套承接约 40 RPM |
+| 4TP Phase 3 自动衔接方式 | 独立 polling 脚本（每 30s grep 日志）| 不依赖 Phase 2 脚本内部钩子，解耦更强；续跑场景也适用 |
+
+---
+
+### 📁 本次会话新增/修改文件
+
+| 文件 | 操作 | 说明 |
+|------|------|------|
+| `scripts/benchmark/run_phase2_auto_chart8tp.sh` | 📝 更新 | 修复 next_rps 错位 + CONVERGED 防护逻辑 |
+| `scripts/benchmark/run_phase2_auto_chart4tp.sh` | 📝 更新 | 同上 |
+| `scripts/benchmark/run_phase3_grid_chart8tp.sh` | ✨ 新建 | 8TP Phase 3 网格脚本（4档×45min）|
+| `scripts/benchmark/run_phase3_grid_chart4tp.sh` | ✨ 新建 | 4TP Phase 3 网格脚本（IDEAL_RPS 参数化）|
+| `scripts/benchmark/run_phase3_auto_chart4tp.sh` | ✨ 新建 | 4TP Phase 3 自动衔接（轮询 Phase 2 日志）|
+| `.cursor/skills/qps-peak-finder/SKILL.md` | 📝 更新 | 新增 ⚠️ 实现陷阱说明 + FAQ 两条 |
+
+---
+
+### ⚠️ 未完成事项
+
+1. **4TP Phase 2 尚未收敛**：当前 rps4.192 运行中，还需 2 档，约 20:10 收敛
+2. **8TP Phase 3 进行中**：qps=0.667 第一档运行中，约 22:30 完成全部 4 档
+3. **4TP Phase 3 待触发**：自动衔接脚本已就位，Phase 2 收敛后自动启动，约 23:30+ 完成
+4. **Phase 3 结果分析**：完成后需用 `qps-sweep-comparison` Skill 生成图表和 REPORT.md
+5. **`clingo/docs/ai_data/xinghan-chart-32b-v1-1-agent-data-structure.md` 待更新**：补充 Agent 数据重构说明
+
+
+---
+
+## 会话日志 — 2026-03-19（晚场：ziwei-32b-v1 8TP 复验 — qps-peak-finder 全自动运行）
+
+### 我们实现了哪些功能
+
+#### 1. ✅ Phase 0 — old_response 数据回填与 token 分布验证
+
+- **自定义回填脚本**：从原始 JSONL 文件（`datas/xinghan-ziwei-32b-v1-1_260303_260305.jsonl`）提取 `role='a'` 字段，写回 CSV 的 `old_response` 列
+- **line_num 格式修复**：Poisson 插值后 `line_num` 含 `_p_0` 后缀（如 `3445_p_0`），需 `split('_p_')[0]` 提取原始行号才能正确映射；最终回填率 100%（28,400/28,400）
+- **Phase 0 结论**：avg_output_len = 245.9 tokens（历史响应），P90 = 395.6 tokens
+
+#### 2. ✅ Phase 1 — 全自动饱和探测（con=25→50→60→70→140）
+
+**新增脚本**：`scripts/benchmark/run_phase1_auto_ziwei8tp.sh`
+- 从 INIT_CON=50 续跑（con=25 上轮已完成）
+- 自动翻倍/+10 策略，饱和后自动衔接 Phase 2
+
+**各档结果**：
+
+| 并发 | decode_throughput | 增幅 | 决策 |
+|------|------------------|------|------|
+| con=25 | 317.485 t/s | — | 翻倍 |
+| con=50 | 322.117 t/s | +1.46% | 接近饱和，+10 |
+| con=60 | 328.613 t/s | +2.02% | 接近饱和，+10 |
+| con=70 | 366.665 t/s | +11.58% | 显著增长，翻倍 |
+| **con=140** | **184.488 t/s** | **-49.68%** | **❌ 已饱和** |
+
+**饱和点结论**：峰值档位 con=70，max_rps_estimate = **2.0935 req/s**
+
+#### 3. ✅ Phase 2 — 自适应 RPS 逼近（运行中）
+
+**新增脚本**：`scripts/benchmark/run_phase2_auto_ziwei8tp.sh`（前期已建）
+
+**运行轨迹**（截至记录）：
+
+| 轮次 | RPS | TTFS P90 | SLA | bracket |
+|------|-----|---------|-----|---------|
+| 第1轮 | 2.5122 | 12615ms | ❌ | HI=2.5122 |
+| 第2轮 | 1.6748 | 1783ms | ❌（超 19%）| HI↓=1.6748 |
+| 第3轮 | 1.4584 | 1291ms | ✅ | LO=1.4584 |
+| 第4轮 | 1.5629 | — | 🔄 运行中 | [1.4584, 1.6748] |
+
+⚠️ **关键发现**：生产 RPM 100（=1.6667 req/s）在服务能力边界附近，rps=1.6748 已 SLA FAIL（TTFS P90=1783ms，超限 19%），ideal_rps 预计在 1.46~1.57 req/s 区间，低于生产负载。
+
+#### 4. ✅ ziwei-32b 8TP Peak Finder 分析归档（2026-03-20）
+
+**完成内容**：
+- Phase 1 Little's Law 估算：con70（峰值档 2.0935 req/s × mean_E2E 28.83s = L_server ≈ **60**）
+- 合并 Phase 2+3 数据 → `logs/ziwei-32b-8tp-phase23_merged_20260319/`（10档）
+- 运行 `multi_exp_compare`：10/10 成功，HTML 图表生成
+- SLA 分析结论：ideal_rps = **1.5902 req/s（95.4 RPM）**
+- ⚠️ **关键风险**：生产 100 RPM > SLA 上限 95.4 RPM，rps=1.6748 时 TTFS P90 = 1783ms（超限 19%）
+- REPORT.md 生成：`results/ziwei-32b_peak_finder_20260319/REPORT.md`
+- `results/models/xinghan-ziwei-32b-v1/model-context.md` 追加 peak-finder 字段
+- `results/models/INDEX.yaml` 更新：recommendation 标注 ⚠️ 风险，saturation_* 字段完整
+- `results/README.md` 添加 ziwei peak-finder 条目
+
+---
+
+### 我们遇到了哪些错误
+
+#### 错误 1：Phase 2 以错误参数启动（max_rps 正则误提取吞吐值）
+
+**现象**：Phase 1 saturation 后，Phase 2 以 `PEAK_RPS=184.488 START_RPS=221.3856` 启动，立即报 "数据集行数 28400 不足，有效时长仅 106s"
+
+**根因**：`run_phase1_auto_ziwei8tp.sh` 中 MAX_RPS 提取：
+```bash
+MAX_RPS=$(echo "${ANALYSIS_OUT}" | grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+' | tail -1)
+```
+analyze 输出格式为：
+```
+max_rps_estimate = 184.488 / 228.7 = 0.8065 req/s
+```
+正则在此行首次命中了 `184.488`（decode_throughput），而非最终结果 `0.8065`
+
+#### 错误 2：con=140 benchmark 总时长 901s（远超 300s 设计时限）
+
+**现象**：con=140 跑了 901 秒，请求才全部完成（理论 300s 时限）
+
+**根因**：300s 是发送请求的时限（TIME_LIMIT），服务超载后响应极慢，140 个并行 in-flight 请求在时限到期后仍需等待全部返回，导致总时长 3 倍于预期
+
+**影响**：吞吐降至 184 t/s（-49.68%），确认服务已严重超载，饱和判断正确
+
+---
+
+### 我们是如何解决这些错误的
+
+#### 错误 1 的解决
+
+1. **识别**：看到 Phase 2 以 221 req/s 启动（超出数据集容量）立即判断参数错误
+2. **追溯**：检查 con=140 分析输出，发现公式行 `max_rps_estimate = 184.488 / ...` 被误解析
+3. **修复**：手动以正确参数重启 Phase 2：
+   ```bash
+   PEAK_RPS=2.0935 START_RPS=2.5122 bash scripts/benchmark/run_phase2_auto_ziwei8tp.sh
+   ```
+   使用 con=70 的 max_rps_estimate（2.0935 req/s），这是真正的峰值档位
+
+4. **根治（待做）**：`run_phase1_auto_ziwei8tp.sh` 中 MAX_RPS 应从上一档（非饱和档）的检查点提取，而非从当前饱和档的 analyze 输出解析
+
+---
+
+
+---
+
+## 2026-03-20 会话（续）：chart-32b 回放测试分析归档
+
+### 完成内容
+
+#### xinghan-chart-32b-v1-1-agent 峰值回放验证（Step 6 + 6.5）
+
+**背景**：回放测试于 14:52~16:43 后台运行完成（约 110 分钟），此前 skills/workflow 文档更新后，本次进行结果分析归档。
+
+**回放核心结果**：
+- 总请求 5,826 条，成功率 **99.19%**（47 条失败，主为超时）
+- TTFT P90 = **0.135 s**（SLA 1.5s，余量 91%）
+- TTFS P90 = **0.442 s**
+- E2E P90 = **6.811 s**（SLA 150s，余量充足）
+- 实测 QPS 0.876 req/s（keep-income-time 模式下 5,826 条/110min = 平均 ~53 RPM）
+- 单实例均摊 ~39 RPM，离 ideal_rps 7.6 req/s = 457 RPM 还有 11× 余量
+
+**SLA 判断**：
+- 延迟全部通过（TTFT/TTFS/E2E 均大幅优于阈值）
+- 成功率 99.19%：宽松标准（99%）通过，严格标准（99.9%）略低
+- 47 条失败为偶发超时，非容量瓶颈
+
+**归档操作**：
+- 生成 `results/chart-32b_replay_20260320/REPORT.md`（详细 6 节）
+- 离线分析 HTML + 7 张 PNG 图表
+- `INDEX.yaml` 更新：`replay_success_rate=99.19, replay_ttft_p90_s=0.135, replay_e2e_p90_s=6.811`，recommendation 改为 ✅ 可上线
+- `results/README.md` 新增 chart-32b_replay 条目 + 详细节
+- `model-context.md` 追加回放结果字段
+
+### 遇到的问题
+
+无新问题，回放测试已于本次会话前在后台完成。
+
+### 当前状态
+
+| 模型 | QPS 评估 | 回放测试 | eval_status |
+|------|---------|---------|-------------|
+| xinghan-chart-32b-v1-1-agent | ✅ peak-finder 完成 | ✅ 99.19%，可上线 | ready（待 model-eval-report 最终确认）|
+| xinghan-ziwei-32b-v1 | ✅ peak-finder 完成 | ✅ 历史回放已有 | ⚠️ 生产100RPM > SLA上限95.4RPM，需扩容 |
+| tianji-querysafety-4b-v2-3 | ✅ peak-finder 完成（Phase3部分）| ✅ 历史回放100% | ⚠️ 余量仅2.6%，建议扩9实例 |
+| xinghan-guoxue-72b-v1-2-reason | ✅ 拐点0.245 req/s | ❌ 缺失 | ⚠️ 业务峰值修正为256RPM，需20实例 |
+
+---
+
+## 2026-03-20 会话（续）：chart-32b Step 7 EVAL_REPORT.md 生成
+
+### 完成内容
+
+#### Step 7 — 生成评估报告（xinghan-chart-32b-v1-1-agent）
+
+**调用 Skill**：model-eval-report
+
+**输入文件**：
+- `results/models/xinghan-chart-32b-v1-1-agent/model-context.md`
+- `results/chart-32b_peak_finder_20260319/REPORT.md`（QPS peak-finder，8TP vs 4TP）
+- `results/chart-32b_replay_20260320/REPORT.md`（118 RPM 峰值回放）
+
+**资源计算**：
+- 业务峰值 118 RPM = 1.967 req/s
+- 单实例 ideal_rps = 7.6132 req/s（8TP）→ 单实例覆盖率 387%
+- 推荐实例数 = 1（含10%余量仍覆盖349%）
+- 如需 HA：2 实例 × 8TP = 16 卡 L20
+
+**上线判断**：✅ 可上线（成功率99.19% ≥ 99%，延迟全部通过，QPS容量11×余量）
+
+**归档操作**：
+- 生成 `results/models/xinghan-chart-32b-v1-1-agent/EVAL_REPORT.md`
+- `INDEX.yaml` 更新：`eval_report` 路径填入，`recommendation` 更新为资源建议

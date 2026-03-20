@@ -241,3 +241,17 @@ replay_ttft_p90_s: <x>
 replay_ttfs_p90_s: <x>
 replay_e2e_p90_s: <x>
 ```
+
+### 4. results/models/INDEX.yaml 追加回放指标
+
+在对应模型的 `performance:` 节追加回放字段（**不覆盖已有字段**）：
+
+```yaml
+# 找到模型条目，在 performance 下追加：
+performance:
+  replay_success_rate: <N>        # 百分比，保留两位小数
+  replay_ttft_p90_s: <x>         # 秒
+  replay_e2e_p90_s: <x>          # 秒
+```
+
+> 仅回放分析完成后写入；无回放测试时跳过此步，INDEX.yaml 中不添加这些字段。

@@ -388,3 +388,55 @@ format:
 **做了什么**：设计并实现"通用脚本 + `.env` 配置文件"体系（方案 C）：三个通用脚本（`run_qps_sweep.sh`、`run_replay.sh`、`process.py`）接受 `.env` 路径参数，按 `DATA_FORMAT` 等字段自动分派逻辑；以 chart 模型为首个示例，创建 `configs/models/xinghan-chart-32b-v1-1-agent/` 下 8tp/4tp 两套 `.env` 及特例说明；同步更新 4 个 Skill（`qps-benchmark-sweep`、`llm-replay-benchmark`、`traffic-dataset-prep`、`model-evaluation-workflow`）新增"新模式执行方式"节。
 
 **结果**：框架落地，新模型接入只需创建一个 `.env` 文件，无需再写专属 bash 脚本；4 个 Skill 均已同步，新成员可直接按 Skill 指引接入。
+
+---
+
+# 📅 2026-03-19 工作日报
+
+## 一、chart-32b 空响应问题深度排查
+
+**背景**：chart-32b 8TP/4TP QPS 扫描结果显示全部 SLA FAIL，初步诊断（nanobot）认为是 CSV 格式不兼容，需要复核真实原因。
+
+**做了什么**：直接运行 `load_exp_csv()` + `analysis_response()` 复核，证明格式解析完全正常，推翻错误诊断；逐行检查发现真实根因是模型对 ~1% 请求返回空响应（`token_list` 仅 `[START]+[DONE]`，HTTP 200，首个 token 命中 `<|im_end|>` 对话结束符）；逐一排查并推翻四个假设（输入污染、特定 prompt 决定论、服务过载、短问题触发）；提取全量 20 档共 1,116 条空响应，建立完整事件报告。
+
+**结果**：空响应是模型推理层的概率性问题，与压测 QPS 无因果关系；事件报告记录完整排查链路，为后续模型侧 fix 提供依据。
+
+---
+
+## 二、qps-peak-finder Skill 算法成熟化
+
+**背景**：guoxue 模型 Phase 2 探测了 11 档仍振荡，核心问题是比例步进没有"历史记忆"，已知 bracket 区间 [0.2494 ✅, 0.2529 ❌]（宽 1.4%）本可 1 次收敛。
+
+**做了什么**：在 `analyze_peak_finder.py` 新增 `--bracket-lo/hi` 参数，实现两阶段收敛——bracket 宽 ≥3% 时用几何中点（快速逼近），<3% 直接收敛；输出机器可读标记（`[SLA_PASS]`、`[SLA_FAIL]`、`[NEXT_RPS=X]`）；`run_phase2_auto.sh` 配套改造，每轮自动解析标记并更新 bracket；新增 `--phase 3` 汇总分析，更新 SKILL.md 中 Phase 3 定位描述（为容量曲线补充中间数据密度，而非再次逼近边界）。
+
+**结果**：实测 guoxue bracket [0.2494, 0.2529] → 1 次即确认收敛（原需 11+ 次）；guoxue Phase 3 全部 SLA ✅，实验完整收尾。
+
+---
+
+## 三、guoxue 实验全量整理 & 报告交付
+
+**背景**：qps-peak-finder 三阶段（Phase 1 饱和探测 / Phase 2 自适应逼近 / Phase 3 验证网格）全部完成，需要整理成标准化报告并更新模型档案。
+
+**做了什么**：将 Phase 2+3 共 16 档用硬链接合并，跑 `qps-sweep-comparison` 生成 3 个容量曲线 HTML；生成完整 REPORT.md（含三阶段数据、与原网格搜索对比：时间节省 2/3，精度提升 5×）；更新 `model-context.md`（追加 peak-finder 系列字段）和 `EVAL_REPORT.md`（综合两轮实验，上线建议 ⚠️ 有条件上线，推荐 4 实例 × 8TP = 32 卡 L20）；修正实验目录位置（从 `results/models/<model>/` 移至 `results/` 根层）。
+
+**结果**：guoxue 模型档案完整闭环，SLA 最大 QPS 0.2494 req/s 与原网格搜索 0.245 偏差仅 1.8%，交叉验证一致。
+
+---
+
+## 四、Dashboard 新增极限场景（Phase 1 饱和测试）指标展示
+
+**背景**：Phase 1 饱和测试产出了极限 RPS 和可容并发数，这是容量规划和服务启动配置的重要参考，但 Dashboard 当前只展示 SLA 合规拐点，缺少硬件上限数据。
+
+**做了什么**：在 INDEX.yaml 新增 `saturation_rps/rpm/concurrency` 三个可选字段；扩展 `serve.py`，新增 `.saturation-block` CSS 样式（浅黄背景 + 橙色边框，与 SLA 区视觉区分）和可折叠 `<details>` 渲染分支（无数据时静默跳过，零 JS 依赖）；归档设计文档。
+
+**结果**：guoxue 卡片新增极限场景折叠区块（极限 RPS 0.371 / 可容并发 120），其他模型卡片无影响；全部验收项通过。
+
+---
+
+## 五、chart-32b QPS Peak Finder Phase 2 收敛 & Phase 3 启动
+
+**背景**：chart-32b 8TP/4TP 两路 Phase 2 自适应逼近并行运行，发现 `run_phase2_auto.sh` 存在两个 bug 导致探测结果不可信，需修复并恢复正确收敛。
+
+**做了什么**：定位并修复两个 bug——①bracket 更新后未重算几何中点（导致下一档比通过档还低）；②旧代码直接读 `CONVERGED` 标记未校验 bracket 宽度（导致 4TP 在 bracket 宽 50% 时误判收敛）；修复后 8TP 完成收敛（ideal_rps=7.6132 req/s，7 档），4TP 从误判点续跑（`INIT_LO/INIT_HI` 环境变量，bracket 当前 [4.192, 4.410]，还需 2 档）；8TP Phase 3（4 档 × 45min）已启动，4TP Phase 3 自动衔接脚本（每 30s 轮询日志）已就位待触发；在 SKILL.md 补充 `⚠️ 实现陷阱：next_rps 必须在 bracket 更新后重新计算` 详细说明。
+
+**结果**：8TP Phase 2 收敛完成，Phase 3 运行中；4TP Phase 2 续跑中，Phase 3 将自动衔接；两个脚本 bug 均已修复并落入 SKILL 文档，防止复现。

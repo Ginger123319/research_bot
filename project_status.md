@@ -1,3 +1,270 @@
+# 会话报告 — 2026-03-20（下午场）：在线承载量监控集成
+
+## 📌 会话概览
+
+- **日期**：2026-03-20（周五）下午
+- **主要目标**：从 VictoriaMetrics 查询线上模型的每日最大 RPM，与评测结论对比；将功能集成至 `serve.py` Dashboard；制作同事可直接使用的 Demo 工具
+- **Git 分支**：main（commit: `75ad8c0`）
+- **涉及模型**：tianji-querysafety-4b-v2-3（8 实例），lingyu-235b-A22b-v9-2（10 实例）
+
+---
+
+## ✅ 成果
+
+### 1. VictoriaMetrics 在线 RPM 查询能力
+
+**接口地址**：`http://172.21.52.62:8481/select/0/prometheus`
+
+**关键发现**：
+- SGLang 指标存在两种命名格式（下划线 vs 冒号），代码自动探测两种
+- 部署名 = `nexus_aiinfra_cece_com_name` label，与 K8s LWS 名称完全一致
+- 已确认两个线上部署的 7 日峰值数据
+
+| 模型 | 7日峰值 RPM | 总容量（SLA × 实例数）| 使用率 |
+|------|------------|---------------------|--------|
+| tianji-querysafety-4b-v2-3 | 3524 RPM | 480 × 8 = 3840 RPM | ⚡ 91.8% |
+| lingyu-235b-A22b-v9-2 | 758 RPM | 180 × 10 = 1800 RPM | ✅ 42.1% |
+
+### 2. serve.py 集成（Dashboard 在线承载量区块）
+
+**新增 API 端点**：`GET /api/online-rpm?deployment=<部署名>&days=7`
+
+**Dashboard 展示**（模型卡片底部自动异步加载）：
+- 当前实时 RPM
+- 7 日峰值 RPM
+- vs 评测 SLA 使用率（绿/黄/红色）
+- 可展开的每日峰值明细表
+
+**INDEX.yaml 扩展字段**：
+```yaml
+online_deployment_name: tianji-querysafety-p4b-v23-tp4
+deployment:
+  current_instances: 8
+```
+> 后续新模型上线只需加这两个字段，无需改代码
+
+### 3. Demo 工具（scripts/demo/）
+
+| 文件 | 说明 |
+|------|------|
+| `scripts/demo/query_online_rpm.py` | 独立 CLI 工具，零依赖，彩色终端输出 |
+| `scripts/demo/README.md` | 同事使用文档（含原理说明、常见部署名表、JSON 集成示例）|
+
+---
+
+## 🔧 文件变更（本次会话）
+
+| 文件 | 类型 | 说明 |
+|------|------|------|
+| `scripts/serve.py` | 修改 | +220 行，新增 VM 查询 + API 端点 + Dashboard JS |
+| `results/models/INDEX.yaml` | 修改 | tianji/lingyu 填入 online_deployment_name + current_instances |
+| `scripts/demo/query_online_rpm.py` | 新增 | 独立 CLI 查询工具 |
+| `scripts/demo/README.md` | 新增 | 同事使用文档 |
+
+---
+
+## 🐛 问题与解决方案
+
+| # | 问题 | 根因 | 解决 |
+|---|------|------|------|
+| 1 | Dashboard 卡片无 `data-dep`，页面 6KB | `--directory .` 找不到 INDEX.yaml | 改用 `--directory results` |
+| 2 | lingyu 显示"使用率 421%"看似超载 | JS 用单实例 SLA（180）比对，未乘实例数 | 加 `data-instances` 属性，JS 改用 `totalSlaRpm = slaRpm × instances` |
+| 3 | tianji 部署 instant 查询返回空 | tianji 用旧版 SGLang（指标名用冒号） | `_SGLANG_METRICS` 列表自动 fallback |
+
+---
+
+## 🎯 技术决策
+
+1. **零额外依赖**：VM 查询仅用标准库 `urllib.request`，与 serve.py 现有依赖完全兼容
+2. **异步加载**：Dashboard 先渲染静态内容，JS 后台 fetch RPM，不阻塞页面
+3. **双格式探测**：`_SGLANG_METRICS` 列表顺序 fallback，新版优先，向后兼容旧版
+4. **多实例换算**：SLA 对比用总容量（单实例 × 实例数），避免误判超载
+
+---
+
+## ⚠️ 未完成 / 注意事项
+
+1. **`run_all_phases_tianji4tp_bakv1.sh` MAX_RPS 提取逻辑有缺陷**（上次会话遗留）
+   - checkpoint 文件是 markdown 表格，现有 grep 正则无法匹配
+   - 修复方向：`grep -oP '\| max_rps_estimate \| \K[\d.]+' checkpoint.md | tail -1`
+
+2. **ziwei / hepan / guoxue 暂无 `online_deployment_name`**
+   - 如这几个模型已上线，需补充 K8s LWS 名称到 INDEX.yaml
+
+3. **tianji 当前使用率 91.8% 偏高**（接近上限）
+   - 建议关注 3524 RPM 峰值是否持续，必要时扩容或评估 bakv1
+
+---
+
+## 📈 下次会话建议
+
+1. **chart-32b Phase 3 结果收尾**：确认 4TP/8TP Phase 3 网格是否跑完，生成最终对比报告
+2. **tianji 容量监控**：下次会话确认当日峰值是否超过 3840 RPM 总容量
+3. **扩展在线监控**：若 ziwei/hepan/guoxue 等已上线，补充 `online_deployment_name` 后可直接在 Dashboard 查看
+
+---
+
+# 会话报告 — 2026-03-20（tianji-querysafety-4b-v2-3 bakv1 QPS Peak Finder 全流程）
+
+## 📌 会话概览
+
+- **日期**：2026-03-20（周四）
+- **主要目标**：对 `tianji-querysafety-4b-v2-3` 的 bakv1 端点使用 `qps-peak-finder` Skill 完成 Phase 1 饱和探测、Phase 2 自适应逼近、Phase 3 上线验证网格（Phase 3 运行中）
+- **Git 分支**：main（commit: 7c50be8）
+- **Endpoint**：`https://infer.geniuworks.com/infra-tianji-querysafety-p4b-v23-bakv1/v1/chat/completions`
+- **触发背景**：用户提供最新线上数据（8 实例 3584 RPM），需对 bakv1 实例做全流程 QPS 容量评估，沿用先验知识（旧 4TP 测试 ideal_rps ≈ 8.0 RPS）加速收敛
+
+---
+
+## ✅ 成果
+
+### 1. 数据集 & 端点确认
+
+| 项目 | 值 |
+|------|-----|
+| Endpoint HTTP | 200 ✅ |
+| 数据集行数 | 44,099 条 |
+| old_response 填充率 | 100% ✅ |
+| avg_output_len | ~14 tokens（极短，安全分类 JSON） |
+| production_rps | 3584 ÷ 8 ÷ 60 = **7.47 RPS/实例** |
+| Grafana max active_requests | **9**（跳过 con=5 低档爬坡，节省约 20min） |
+
+### 2. 创建 4 个新 benchmark 脚本
+
+| 文件 | 用途 |
+|------|------|
+| `scripts/benchmark/run_phase1_auto_tianji4tp_bakv1.sh` | Phase 1 全自动（con=9 起跳，NUM_REQUESTS_MUL 动态上限防超数据集）|
+| `scripts/benchmark/run_phase2_auto_tianji4tp_bakv1.sh` | Phase 2 全自动（E2E P90 ≤ 0.35s 代理，bracket 几何中点，避免旧值复用陷阱）|
+| `scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` | Phase 3 网格验证（4档×45min，IDEAL_RPS 参数，production_rps=7.47 托底）|
+| `scripts/benchmark/run_all_phases_tianji4tp_bakv1.sh` | 主编排（Phase 1→2→3 串联，⚠️ checkpoint 提取逻辑有 bug，见问题记录）|
+
+### 3. Phase 1 饱和探测结论
+
+- con=9（Grafana 起跳）→ con=18 → con=36（下降，确认饱和）
+- **peak_decode_throughput = 731.4 tokens/s**（con=18 时）
+- **max_rps_estimate = 52.6 RPS**（avg_output_len = 13.9 tokens）
+- 耗时：约 25 分钟
+
+### 4. Phase 2 自适应逼近结论
+
+- 共 10 档探测，从 63.1 RPS 高位下降 → bracket 收敛
+- **ideal_rps = 7.8554 RPS**（bracket [7.8554, 8.0609]，宽度 2.6% < 3%）
+- 与旧端点结论（ideal ≈ 8.0）完全一致，bakv1 性能正常
+- 耗时：约 3.3 小时
+
+### 5. Phase 3 上线验证网格（进行中）
+
+- PID: 1698848，日志：`logs/tianji_bakv1_phase3_20260319.log`
+- 输出目录：`logs/tianji-querysafety-bakv1-phase3_20260320/`
+- 四档：7.47 → 7.60 → 7.73 → 7.86 RPS（每档 45min，约 13:45 完成）
+
+---
+
+## 🐛 问题与解决方案
+
+### 问题 1：主编排脚本 Phase 1→2 过渡时 MAX_RPS 提取错误
+
+**根因（两层）**：
+1. `analyze_peak_finder.py` stdout 格式：`max_rps_estimate = 613.147 / 13.8 = 44.4213 req/s`  
+   → `grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+'` 捕获第一个数字 `613.147`（decode_throughput），非 `44.4213`（真正的 max_rps_estimate）
+2. checkpoint 文件为 markdown 表格格式（`| max_rps_estimate | 44.3213 req/s |`）无 `=` 符号，主编排脚本从 checkpoint 提取时 grep 无匹配，`set -euo pipefail` 导致管道返回 1 → 脚本退出
+
+**处置**：Phase 2 通过单独手动启动（`PEAK_RPS=52.59 START_RPS=63.1097`），结果完全有效。
+
+**待修复**（下次使用主编排前）：修改 `run_all_phases_tianji4tp_bakv1.sh` 中的提取逻辑：
+```bash
+# 从 checkpoint 表格中正确提取（当前错误版）
+MAX_RPS=$(grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+' "${P1_CHECKPOINT}" | tail -1)
+
+# 修复版（匹配 markdown 表格格式）
+MAX_RPS=$(grep -oP '\| max_rps_estimate \| \K[\d.]+' "${P1_CHECKPOINT}" | tail -1)
+```
+
+### 问题 2：Phase 3 首次调用未传 IDEAL_RPS
+
+**现象**：`IDEAL_RPS: 必须设置 IDEAL_RPS` 报错  
+**解决**：`IDEAL_RPS=7.8554 bash scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` ✅
+
+---
+
+## 🎯 技术决策
+
+### 决策 1：E2E P90 ≤ 0.35s 作为 E2E P95 ≤ 400ms 的代理
+
+该模型 SLA 主判断指标为 E2E P95 ≤ 400ms，但 analyze 脚本只支持 P90 阈值。基于前次测试数据（QPS=8.0 时 P90=0.330s PASS，QPS=8.5 时 P90=0.363s FAIL），使用 0.35s 作为代理与真实 P95 门限结论完全一致。
+
+### 决策 2：production_rps = 7.47 RPS（3584 RPM / 8实例 / 60）
+
+用户提供最新线上数据（8实例 3584 RPM），每实例承担 1/8 流量 = 448 RPM = 7.47 RPS。这与 Phase 2 ideal_rps=7.8554 的差距仅 5.1%，说明当前线上实例运行在 SLA 边缘附近。
+
+### 决策 3：NUM_REQUESTS_MUL 动态上限
+
+Phase 1 脚本中对每档 NUM_REQUESTS 动态计算：`min(CON × 1500, dataset_rows)`，防止高并发档位请求数超过数据集大小（44,099条），避免基准工具报错。
+
+---
+
+## ⚠️ 未完成事项
+
+1. **Phase 3 运行中**：约今天 13:45 完成，完成后需用 `qps-sweep-comparison` Skill 出图分析
+2. **主编排脚本 bug**：`run_all_phases_tianji4tp_bakv1.sh` 的 MAX_RPS 提取逻辑需修复（见上）
+3. **EVAL_REPORT 待生成**：Phase 3 完成后需为 tianji-querysafety-4b-v2-3 生成最终 EVAL_REPORT.md
+
+---
+
+## 💡 建议与注意事项
+
+1. **当前单实例余量极低（5.1%）**：ideal_rps=7.8554 vs production_rps=7.47，几乎无余量。建议每实例留至少 20% 余量（即单实例目标负载 ≤ 6.3 RPS），当前 8 实例配置对应的安全 RPM 上限约 3024 RPM（6.3×8×60），现有 3584 RPM 已超出。
+2. **bakv1 端点性能与旧 4TP 端点一致**：可认为两者同等部署规格，结论互相印证。
+3. **SGLang KV Cache 预热效应仍存在**：高 QPS 时延迟会因前缀缓存热身而下降（旧测试 6.9~7.0 RPS 时出现骤降），Phase 3 网格档位在 7.47~7.86 之间，需关注是否有类似现象。
+
+---
+
+## 📈 下次会话计划
+
+### 1. 确认 Phase 3 完成状态
+
+```bash
+tail -30 logs/tianji_bakv1_phase3_20260319.log
+ls logs/tianji-querysafety-bakv1-phase3_20260320/
+# 预期有 4 个 qpsX.XXXX 子目录
+```
+
+### 2. Phase 3 完成后：qps-sweep-comparison Skill 出图
+
+```bash
+# 使用 qps-sweep-comparison Skill 分析 Phase 3 结果
+# 输入目录：logs/tianji-querysafety-bakv1-phase3_20260320/
+# SLA: TTFS P90 ≤ 1.5s, E2E P90 ≤ 0.35s (P95 ≤ 400ms 代理)
+# 同时可叠加 Phase 2 各档位数据绘完整曲线
+```
+
+### 3. 修复主编排脚本 bug
+
+修改 `run_all_phases_tianji4tp_bakv1.sh`：
+```bash
+# 修复 MAX_RPS 提取逻辑（从 markdown 表格格式 checkpoint 中提取）
+MAX_RPS=$(grep -oP '\| max_rps_estimate \| \K[\d.]+' "${P1_CHECKPOINT}" | tail -1)
+```
+
+### 4. 生成 tianji-querysafety EVAL_REPORT.md
+
+Phase 3 完成后调用 `model-eval-report` Skill，汇总：
+- 部署配置（4TP×1实例，L20×4）
+- ideal_rps = 7.8554 RPS（480 RPM/实例）
+- production_rps = 7.47 RPS（8实例共 3584 RPM）
+- 余量仅 5.1%，建议扩容至 9~10 实例（含 20% 余量）
+
+### 5. 整体模型评估状态
+
+| 模型 | Phase | ideal_rps | production_rps | 余量 | 下一步 |
+|------|-------|-----------|----------------|------|--------|
+| tianji-querysafety-4b-v2-3 bakv1 | Phase 3 🔄 | 7.8554 RPS | 7.47 RPS | 5.1% | Phase 3 完成→出图→EVAL_REPORT |
+| xinghan-chart-32b-v1-1-agent | ✅ 已完成 | 7.61 RPS (8TP) | 40 RPM | 1143% | EVAL_REPORT 已生成 |
+| xinghan-ziwei-32b-v1 | ✅ 已完成 | ~1.59 RPS (8TP) | 100 RPM | -5% | ⚠️ 生产超上限，需扩容 |
+| xinghan-guoxue-72b-v1-2-reason | ✅ 已完成 | 0.245 RPS | 4.27 RPS | — | 需多实例部署 |
+
+---
+
 # 会话报告 — 2026-03-19（晚场：ziwei-32b-v1 8TP 复验 qps-peak-finder）
 
 ## 📌 会话概览

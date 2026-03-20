@@ -3861,6 +3861,283 @@ max_rps_estimate = 184.488 / 228.7 = 0.8065 req/s
 
 ---
 
+## 2026-03-20 会话：tianji-querysafety-4b-v2-3 bakv1 QPS Peak Finder 全流程
+
+### 完成内容
+
+#### Step 1 — 背景信息收集 & 先验分析
+
+**调用 Skill**：`qps-peak-finder` + `brainstorming`
+
+**确认信息**：
+- 目标 Endpoint：`https://infer.geniuworks.com/infra-tianji-querysafety-p4b-v23-bakv1/v1/chat/completions`（HTTP 200 ✅）
+- 数据集：`datas/output_tianji_querysafety/tianji-querysafety-4b-v2-3_peak30min.csv`（44,099 行，`old_response` 100% 填充 ✅）
+- Tokenizer：`/mnt/ai-llm/tianji_query_safety/v2p3_ep1`，`max_completion_tokens=256`
+- production_rps = 3584 RPM / 8实例 / 60 = **7.47 RPS/实例**（用户提供线上实时数据）
+- Grafana max active_requests = **9**（用户提供，跳过低档爬坡）
+- 先验知识（旧端点 4TP 测试）：SLA 合规上限 ≈ 8.0 RPS，E2E P95 ≤ 400ms
+- SLA 代理方案：使用 E2E P90 ≤ 350ms 作为 E2E P95 ≤ 400ms 的保守等价
+
+#### Step 2 — 创建四个压测脚本
+
+**新建文件**：
+
+| 文件 | 说明 |
+|------|------|
+| `scripts/benchmark/run_phase1_auto_tianji4tp_bakv1.sh` | Phase 1 自动饱和探测（con=9 起跳，NUM_REQUESTS_MUL 动态上限） |
+| `scripts/benchmark/run_phase2_auto_tianji4tp_bakv1.sh` | Phase 2 自适应逼近（E2E P90 ≤ 0.35s，bracket 几何中点，含 ⚠️ 旧 NEXT_RPS 复用陷阱修复）|
+| `scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` | Phase 3 上线验证网格（4档×45min，linspace [7.47, ideal_rps]，production_rps 托底）|
+| `scripts/benchmark/run_all_phases_tianji4tp_bakv1.sh` | 主编排脚本，串联 Phase 1→2→3 |
+
+#### Step 3 — Phase 1 饱和探测（20:08~20:33，完成）
+
+| 档位 | decode 吞吐 | avg_output_len | max_rps_estimate | 增幅 | 判断 |
+|------|------------|----------------|-----------------|------|------|
+| con=9 | 527.7 t/s | 14.0 tokens | 37.8 RPS | — | 未饱和（+∞，跳过基准） |
+| con=18 | 731.4 t/s | 13.9 tokens | 52.6 RPS | **+38.6%** | 未饱和，翻倍 |
+| con=36 | 613.1 t/s | 13.8 tokens | 44.3 RPS | **-16.2%** | ✅ 已饱和（下降），peak 在 con=18 |
+
+- peak_decode_throughput = **731.4 tokens/s**，avg_output_len = 13.9 tokens
+- max_rps_estimate = 52.6 RPS
+- Phase 2 建议起始 = 52.6 × 1.2 = 63.1 RPS
+
+#### Step 4 — Phase 2 自适应逼近（21:05~00:25，完成）
+
+主编排脚本因 Phase 1→2 checkpoint 正则问题（见错误记录）提前退出，Phase 2 单独启动于 `logs/tianji_bakv1_phase2_20260319.log`。
+
+| 档位 RPS | E2E P90 | SLA | bracket 状态 |
+|---------|---------|-----|------------|
+| 63.1097 | 16.00 s | ❌ FAIL | HI=63.11（超载） |
+| 42.0731 | 21.78 s | ❌ FAIL | HI 更新=42.07 |
+| 1.5444 | 0.24 s | ✅ PASS | LO=1.5444 建立 |
+| 8.0609 | 0.37 s | ❌ FAIL | HI 更新=8.0609 |
+| 3.5284 | 0.23 s | ✅ PASS | LO 更新=3.5284 |
+| 5.3331 | 0.26 s | ✅ PASS | LO 更新=5.3331 |
+| 6.5566 | 0.28 s | ✅ PASS | LO 更新=6.5566 |
+| 7.2699 | 0.29 s | ✅ PASS | LO 更新=7.2699 |
+| 7.6552 | 0.29 s | ✅ PASS | LO 更新=7.6552 |
+| **7.8554** | **0.31 s** | ✅ PASS | **LO=7.8554，宽度 2.6% < 3% → 收敛** |
+
+**Phase 2 结论**：
+- **ideal_rps = 7.8554 RPS（bracket [7.8554, 8.0609]，宽度 2.6%）**
+- 与旧端点测试（SLA 上限 8.0 RPS）高度一致，bakv1 端点性能相当
+
+#### Step 5 — Phase 3 上线验证网格（运行中）
+
+`IDEAL_RPS=7.8554 bash scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` 启动，PID: 1698848
+
+网格档位（production_rps=7.47 → ideal_rps=7.8554，4档 linspace）：
+- qps=7.4700 RPS (448 RPM) → 🔄 运行中
+- qps=7.5985 RPS (456 RPM) → ⏳ 等待
+- qps=7.7269 RPS (464 RPM) → ⏳ 等待
+- qps=7.8554 RPS (471 RPM) → ⏳ 等待
+
+日志：`logs/tianji_bakv1_phase3_20260319.log`
+输出：`logs/tianji-querysafety-bakv1-phase3_20260320/`
+
+---
+
+### 遇到的错误 & 解决方案
+
+#### 错误 1：主编排脚本 Phase 1→2 过渡失败（MAX_RPS 解析为 decode_throughput）
+
+**现象**：`run_all_phases_tianji4tp_bakv1.sh` 中 Phase 2 使用了错误的 START_RPS = 735.7764（应为 63.11）。  
+**根因**：
+1. `analyze_peak_finder.py` 的 Phase 1 标准输出格式为 `max_rps_estimate = 613.147 / 13.8 = 44.4213 req/s`
+2. 主编排脚本使用 `grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+'` 从 checkpoint 文件提取 MAX_RPS
+3. checkpoint 文件为 markdown 表格格式（`| max_rps_estimate | 44.3213 req/s |`），无 `=` 符号，grep 无法匹配
+4. 进而触发 `set -euo pipefail` 导致 `$()` 管道失败退出，Phase 2 未通过主编排脚本启动
+5. Phase 2 最终是通过单独手动启动的，启动参数正确（START_RPS=63.1097）
+
+**状态**：Phase 2 结果完全有效，但主编排脚本 `run_all_phases_tianji4tp_bakv1.sh` 的提取逻辑有缺陷，**下次使用前需修复**。
+
+**修复方向**（待下次会话）：
+```bash
+# 方案A：从 analyze stdout 输出提取（需 tee 到文件）
+# 方案B：从 checkpoint 表格提取，修改正则为：
+MAX_RPS=$(grep -oP '\| max_rps_estimate \| \K[\d.]+' "${P1_CHECKPOINT}" | tail -1)
+```
+
+#### 错误 2：Phase 3 脚本首次调用漏传 IDEAL_RPS
+
+**现象**：`bash scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` → `IDEAL_RPS: 必须设置 IDEAL_RPS`  
+**原因**：Phase 3 脚本要求环境变量 `IDEAL_RPS`，直接调用未传入。  
+**解决**：`IDEAL_RPS=7.8554 bash scripts/benchmark/run_phase3_grid_tianji4tp_bakv1.sh` ✅
+
+---
+
+### 当前状态
+
+| 模型 | QPS Phase | 状态 | ideal_rps | production_rps | 余量 |
+|------|----------|------|-----------|----------------|------|
+| tianji-querysafety-4b-v2-3 bakv1 | Phase 3 | 🔄 运行中 | **7.8554 RPS** | 7.47 RPS | +5.1% |
+
+---
+
+## 2026-03-20 会话（下午场）：在线承载量监控集成 + Demo 脚本
+
+### 📌 会话目标
+从 VictoriaMetrics（Grafana 数据源）查询已上线模型的实际日流量峰值，与评测结论对比，并将功能集成至 `serve.py` Dashboard，同时制作同事可直接使用的 Demo 脚本。
+
+---
+
+### ✅ 实现内容
+
+#### Step 1 — 探索 VictoriaMetrics 指标体系
+
+**背景**：用户希望查询"单日最大RPM均线"，即每天最高 1 分钟 RPM，用于验证评测结论是否适用于线上。
+
+**执行**：
+```bash
+curl 'http://172.21.52.62:8481/select/0/prometheus/api/v1/label/__name__/values' | python3 -c "..."
+```
+
+**发现**：
+- VictoriaMetrics 中存在两种 SGLang 指标格式：
+  - 新版（SGLang 0.4+）：`sglang_num_requests_total`（下划线）
+  - 旧版（recording rule）：`sglang:num_requests_total`（冒号）
+- 关键 label：`nexus_aiinfra_cece_com_name` = K8s LWS 部署名（与用户输入直接对应）
+- `nexus_aiinfra_cece_com_service_name` = 服务名（带 `infra-` 前缀，不可靠）
+- 在线服务：`infra-lingyu-p235b-a22b-v9`（新格式）、`infra-tianji-querysafety-p4b-v23`（旧格式）
+
+**核心 PromQL**（每日最大 RPM）：
+```promql
+max_over_time(
+  sum(rate(sglang:num_requests_total{nexus_aiinfra_cece_com_name="<部署名>"}[1m]))[24h:1m]
+) * 60
+```
+
+---
+
+#### Step 2 — 验证 tianji-querysafety-p4b-v23-tp4 查询
+
+用户指定部署名 `tianji-querysafety-p4b-v23-tp4`，查询结果：
+
+| 日期 | 单日最大 RPM |
+|------|-------------|
+| 2026-03-13 | 374 |
+| 2026-03-14 | 701 |
+| 2026-03-15~18 | 0（服务停机或流量切走） |
+| 2026-03-19 | **3524** |
+| 2026-03-20 | 3433（仍在线） |
+
+当前实时：`infra-tianji-querysafety-p4b-v23` ≈ 1048 RPM，`bakv1` ≈ 455 RPM
+
+---
+
+#### Step 3 — serve.py 集成 VictoriaMetrics 在线 RPM
+
+**修改文件**：`scripts/serve.py`（+220 行）
+
+**新增内容**：
+
+1. **配置常量**（支持环境变量覆盖）：
+```python
+_VM_BASE = os.environ.get("VM_ENDPOINT", "http://172.21.52.62:8481/select/0/prometheus")
+_SGLANG_METRICS = ["sglang_num_requests_total", "sglang:num_requests_total"]
+```
+
+2. **VM 查询函数**（仅用标准库 `urllib.request`，零依赖）：
+   - `_vm_instant(promql)` — 即时查询当前值
+   - `_vm_range(promql, start, end, step)` — 范围查询
+
+3. **新 API 接口**：`GET /api/online-rpm?deployment=<部署名>&days=7`
+   - 自动探测两种指标格式
+   - 返回：`current_rpm`、`daily_max_7d`、`daily`（按天明细）
+
+4. **Dashboard 模型卡片**：
+   - `_render_model_card` 读取 `online_deployment_name` + `current_instances`
+   - 注入 `data-dep`、`data-sla-rpm`、`data-instances` 属性
+   - 添加 `.online-rpm-block` 占位 div
+
+5. **JavaScript 异步加载**：页面加载后 JS fetch `/api/online-rpm`，展示：
+   - 当前实时 RPM
+   - 7 日峰值
+   - vs 评测 SLA（单实例 RPM × 实例数 = 总容量）使用率（绿/黄/红）
+   - 可折叠的每日峰值表格
+
+---
+
+#### Step 4 — INDEX.yaml 填入部署信息
+
+**修改文件**：`results/models/INDEX.yaml`
+
+新增字段（两个已知上线模型）：
+
+| 模型 | online_deployment_name | current_instances |
+|------|----------------------|------------------|
+| `tianji-querysafety-4b-v2-3` | `tianji-querysafety-p4b-v23-tp4` | 8 |
+| `lingyu-235b-A22b-v9-2` | `lingyu-p235b-a22b-v9-final` | 10 |
+
+---
+
+#### Step 5 — Demo 脚本（scripts/demo/）
+
+**新增文件**：
+- `scripts/demo/query_online_rpm.py`（独立 CLI 工具，零依赖）
+- `scripts/demo/README.md`（同事使用文档）
+
+**功能**：
+```bash
+# 基础查询
+python3 scripts/demo/query_online_rpm.py tianji-querysafety-p4b-v23-tp4
+
+# 带 SLA 对比
+python3 scripts/demo/query_online_rpm.py tianji-querysafety-p4b-v23-tp4 \
+  --instances 8 --sla-rpm 480
+
+# JSON 输出（用于日报集成）
+python3 scripts/demo/query_online_rpm.py lingyu-p235b-a22b-v9-final --json
+```
+
+带颜色终端输出 + ASCII 柱状图 + 容量使用率（绿/黄/红）
+
+---
+
+#### Step 6 — Git Commit
+
+```
+commit 75ad8c0
+feat: 在线承载量监控 + 多模型压测脚本补全 + Skill 体系更新
+33 files changed, 4205 insertions(+), 43 deletions(-)
+```
+
+---
+
+### 🐛 遇到的错误 & 解决方案
+
+#### 错误 1：serve.py 启动参数错误导致 Dashboard 无数据
+
+**现象**：测试用 `--directory .` 启动，`/api/models` 返回错误，卡片无 `data-dep` 属性，页面只有 6,556 字节。  
+**根因**：`_load_index` 拼接路径为 `./models/INDEX.yaml`，但文件在 `results/models/INDEX.yaml`。  
+**解决**：使用正确命令 `.venv/bin/python scripts/serve.py 18999 --bind 0.0.0.0 --directory results`。
+
+#### 错误 2：SLA 对比使用了单实例 RPM，显示 421%
+
+**现象**：lingyu 的"vs 评测 SLA（180 RPM）：421%"——数字看起来像是超载了。  
+**根因**：JS 用单实例 SLA（180 RPM）除，但实际部署了 10 套实例，总容量 1800 RPM。  
+**解决**：
+- `INDEX.yaml` 加 `current_instances: 10`（lingyu）和 `current_instances: 8`（tianji）
+- `_render_model_card` 读取 `dep_instances`，注入 `data-instances` 属性
+- JS 改为 `totalSlaRpm = slaRpm * instances` 做对比，并展示 `480 × 8 = 3840 RPM` 的说明
+
+#### 错误 3：tianji 旧格式指标导致初次 instant 查询返回空
+
+**现象**：`sglang_num_requests_total` 查询 tianji 部署返回空列表。  
+**根因**：tianji 使用旧版 SGLang，指标名为 `sglang:num_requests_total`（冒号格式）。  
+**解决**：`_SGLANG_METRICS` 列表自动 fallback 到冒号格式，两种都尝试。
+
+---
+
+### 📊 最终线上数据（2026-03-20）
+
+| 模型 | 部署名 | 当前 RPM | 7日峰值 | 总容量 | 使用率 |
+|------|--------|---------|---------|--------|--------|
+| tianji-querysafety-4b-v2-3 | tianji-querysafety-p4b-v23-tp4 | ~1048 | 3524 | 3840 | ⚡ 91.8% |
+| lingyu-235b-A22b-v9-2 | lingyu-p235b-a22b-v9-final | ~377 | 758 | 1800 | ✅ 42.1% |
+
+---
+
 ## 2026-03-20 会话（续）：chart-32b Step 7 EVAL_REPORT.md 生成
 
 ### 完成内容

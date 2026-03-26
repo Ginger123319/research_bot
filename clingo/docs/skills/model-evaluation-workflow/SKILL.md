@@ -46,7 +46,7 @@ description: Use when onboarding a new LLM model end-to-end — from local Docke
 # 2. 核查关键产物是否存在（以下任一为空则需重做对应步骤）
 ls datas/output_<model>/           # Step 3 产物
 docker ps | grep <model>           # Step 1 产物
-ls logs/<model>_*_qps_*/           # Step 5 产物
+ls logs/<model-full-name>/<model>_*_qps_*/           # Step 5 产物
 ls results/<model>_*/REPORT.md     # Step 6 产物
 ls results/models/<model>/EVAL_REPORT.md  # Step 7 产物
 ```
@@ -323,8 +323,8 @@ baseline_latency_s: <首次响应秒数>
 
 **前置检查（跳过条件）**：
 ```bash
-ls logs/<model>_*_replay_*/    # 回放结果已存在 → 跳过回放
-ls logs/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
+ls logs/<model-full-name>/<model>_*_replay_*/    # 回放结果已存在 → 跳过回放
+ls logs/<model-full-name>/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
 ```
 
 **QPS 扫描路径选择（二选一）**：
@@ -379,7 +379,7 @@ nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
 → 扫描完成后更新为：
 ### Step 5 ✅ Benchmark 完成（YYYY-MM-DD）
 - 拐点 QPS：~<x> req/s（TTFS P90 ≤ 1.5s 基准）
-- 日志目录：logs/<model>_*_qps_*_all/ 或 logs/<model>-*-phase3_*/
+- 日志目录：logs/<model-full-name>/<model>_*_qps_*_all/ 或 logs/<model-full-name>/<model>-*-phase3_*/
 ```
 
 **model-context.md 追加**（回放完成后）：
@@ -437,9 +437,9 @@ server_concurrency_at_extreme: <n>
 
 > 每次 Step 5/6 完成后**必须执行**，确保实验可回溯，不依赖记忆或翻查 logs。
 
-**前置检查（跳过条件）**：`logs/<exp>/README.md` 已存在且结论非空 → 跳过
+**前置检查（跳过条件）**：`logs/<model-full-name>/<exp>/README.md` 已存在且结论非空 → 跳过
 
-**操作 1**：为每个新完成的实验目录写 `logs/<exp>/README.md`
+**操作 1**：为每个新完成的实验目录写 `logs/<model-full-name>/<exp>/README.md`
 
 每个实验目录的 README 包含：
 - 模型名称、部署配置（TP/DP/GPU）、服务 URL、数据集路径
@@ -466,13 +466,13 @@ linked_experiments:
 **progress.md 写入**：
 ```markdown
 ### Step 6.5 ✅ 实验目录归档（YYYY-MM-DD）
-- logs/<exp>/README.md 已写入
+- logs/<model-full-name>/<exp>/README.md 已写入
 - results/README.md 已更新
 - INDEX.yaml linked_experiments 已更新为 results/ 路径
 ```
 
 > ⚠️ `logs/archive/` 用于存放**已过期或合并后的重复实验**，不是已完成实验的归档地点。
-> 已完成实验目录保留原位（`logs/<exp>/`），README.md 是其可读性保证。
+> 已完成实验目录保留原位（`logs/<model-full-name>/<exp>/`），README.md 是其可读性保证。
 
 ---
 

@@ -194,10 +194,10 @@ nohup bash scripts/benchmark/run_qps_sweep.sh \
 **Step 3**：监控
 
 ```bash
-# 查看当前进度
-cat logs/<group_name>/qps_<timestamp>/progress.txt
+# 查看当前进度（<model-full-name> = 算法提供的完整模型名）
+cat logs/<model-full-name>/<group_name>/qps_<timestamp>/progress.txt
 
-# 实时日志
+# 实时日志（nohup 重定向至共享的 data-pipeline 目录，不加模型层）
 tail -f logs/data-pipeline/<model>_<tp>_qps_<timestamp>.log
 ```
 
@@ -230,34 +230,34 @@ analysis --host 0.0.0.0 --port 8050 --exp logs/<exp_dir>
 **操作步骤**：
 
 ```bash
-# 1. 新建合并目录
-mkdir -p logs/<model>_<config>_all/
+# 1. 新建合并目录（MODEL_NAME = 完整模型名）
+mkdir -p logs/<model-full-name>/<model>_<config>_all/
 
 # 2. 将各段运行的档位子目录复制进去
-cp -r logs/<exp_run1>/qps_*  logs/<model>_<config>_all/
-cp -r logs/<exp_run2>/qps_*  logs/<model>_<config>_all/
+cp -r logs/<model-full-name>/<exp_run1>/qps_*  logs/<model-full-name>/<model>_<config>_all/
+cp -r logs/<model-full-name>/<exp_run2>/qps_*  logs/<model-full-name>/<model>_<config>_all/
 
 # 3. 若有异常档位（如 KV Cache 热身异常），创建 _filtered 版本
-mkdir -p logs/<model>_<config>_all_filtered/
+mkdir -p logs/<model-full-name>/<model>_<config>_all_filtered/
 # 复制时跳过异常档位（如 qps_6.90、qps_7.00）
-for d in logs/<model>_<config>_all/qps_*; do
+for d in logs/<model-full-name>/<model>_<config>_all/qps_*; do
     qps=$(basename $d | sed 's/qps_//')
     if [[ "$qps" != "6.90" && "$qps" != "7.00" ]]; then
-        cp -r "$d" logs/<model>_<config>_all_filtered/
+        cp -r "$d" logs/<model-full-name>/<model>_<config>_all_filtered/
     fi
 done
 
 # 4. 对合并目录运行分析（→ 见 qps-sweep-comparison Skill）
-analysis --host 0.0.0.0 --port 8050 --exp logs/<model>_<config>_all_filtered/
+analysis --host 0.0.0.0 --port 8050 --exp logs/<model-full-name>/<model>_<config>_all_filtered/
 ```
 
 **命名约定**：
-- 合并目录：`logs/<model>_<config>_all/`（不含时间戳，因为跨多次运行）
-- 剔除异常后：`logs/<model>_<config>_all_filtered/`
+- 合并目录：`logs/<model-full-name>/<model>_<config>_all/`（不含时间戳，因为跨多次运行）
+- 剔除异常后：`logs/<model-full-name>/<model>_<config>_all_filtered/`
 
-**已有案例**：
-- `logs/ziwei_4tp_qps_20260310_all/`、`logs/ziwei_8tp_qps_20260310_all/`（ziwei TP4 vs TP8 合并）
-- `logs/tianji_4tp_qps_merged/`、`logs/tianji_4tp_qps_merged_filtered/`（tianji 低段+高段合并，剔除 KV Cache 异常）
+**已有案例**（历史路径，迁移前的旧格式）：
+- `logs/xinghan-ziwei-32b-v1-1/ziwei_4tp_qps_20260310_all/`（ziwei TP4 vs TP8 合并）
+- `logs/tianji-querysafety-4b-v2-3/tianji_4tp_qps_merged/`（tianji 低段+高段合并，剔除 KV Cache 异常）
 
 ---
 
@@ -299,7 +299,7 @@ analysis --host 0.0.0.0 --port 8050 --exp logs/<model>_<config>_all_filtered/
 
 **触发时机**：sweep 脚本打印"全部 N 档完成"后，**在进入分析（qps-sweep-comparison Skill）之前**，写入实验目录 README.md。
 
-**写入路径**：`logs/<group_name>/qps_<timestamp>/README.md`
+**写入路径**：`logs/<model-full-name>/<group_name>/qps_<timestamp>/README.md`
 
 **模板**：
 

@@ -14,7 +14,7 @@
 
 ## 前置条件
 
-- benchmark 已完成，结果 CSV 位于 `logs/<exp_dir>/<exp_name>.csv`
+- benchmark 已完成，结果 CSV 位于 `logs/<model-full-name>/<exp_dir>/<exp_name>.csv`
 - Python venv：`.venv/bin/python`（已含 plotly、matplotlib、pandas、numpy）
 
 ---
@@ -24,10 +24,10 @@
 ### Step 1 — 确认结果 CSV 路径
 
 ```bash
-# 找到最新一次实验的 CSV
-ls logs/<exp_dir>/
+# 找到最新一次实验的 CSV（<model-full-name> = 算法提供的完整模型名）
+ls logs/<model-full-name>/<exp_dir>/
 # 通常命名为 <exp_name>.csv，例如：
-# logs/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv
+# logs/xinghan-ziwei-32b-v1-1/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv
 ```
 
 ### Step 2 — 运行离线分析脚本
@@ -36,7 +36,7 @@ ls logs/<exp_dir>/
 cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 .venv/bin/python scripts/analysis/offline_analysis.py \
-  --csv  logs/<exp_dir>/<exp_name>.csv \
+  --csv  logs/<model-full-name>/<exp_dir>/<exp_name>.csv \
   --out  results/<report_dir>/<exp_name>_analysis.html \
   --png-dir   results/<report_dir> \
   --model-name "<model-name>"
@@ -46,7 +46,7 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 | 参数 | 说明 | 示例 |
 |------|------|------|
-| `--csv` | benchmark 结果 CSV | `logs/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv` |
+| `--csv` | benchmark 结果 CSV | `logs/xinghan-ziwei-32b-v1-1/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv` |
 | `--out` | HTML 报告输出路径 | `results/ziwei_benchmark_20260310_163524/analysis.html` |
 | `--png-dir` | PNG 导出目录（省略则跳过 PNG）| `results/ziwei_benchmark_20260310_163524` |
 | `--model-name` | 模型名，填入骨架标题 | `xinghan-ziwei-32b-v1` |
@@ -150,7 +150,7 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 # 两个 CSV 对比
 .venv/bin/python scripts/analysis/compare_analysis.py \
-  --csv logs/exp_a/result_a.csv logs/exp_b/result_b.csv \
+  --csv logs/<model-full-name>/exp_a/result_a.csv logs/<model-full-name>/exp_b/result_b.csv \
   --names "版本A" "版本B" \
   --out results/compare_20260318/compare_report.md \
   --html results/compare_20260318/compare_report.html
@@ -195,7 +195,7 @@ cd /mnt/ai-infra/users/wnd/workspace/execute/guofan
 
 ```bash
 .venv/bin/python scripts/analysis/offline_analysis.py \
-  --csv  logs/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv \
+  --csv  logs/xinghan-ziwei-32b-v1-1/ziwei_peak_replay_20260310_163524/ziwei_peak_replay_100rpm.csv \
   --out  results/ziwei_benchmark_20260310_163524/ziwei_replay_100rpm_analysis.html \
   --png-dir   results/ziwei_benchmark_20260310_163524 \
   --model-name "xinghan-ziwei-32b-v1"

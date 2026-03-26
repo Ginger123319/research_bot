@@ -116,7 +116,9 @@ AI-data 平台 downloaded 导出的每行结构：
 [
   {"role": "b",  "content": "用户消息", "time": 1768545951000, "_id": "...", ...},
   {"role": "ib", "content": "内部八字数据", ...},
-  {"role": "a",  "content": "模型回复", "prompt": "[{\"role\":\"system\",...}]",
+  {"role": "a",  "content": "模型回复（AI-data 后处理后，可能含 <con> 包装）",
+   "ai_deep_content": "推理过程原文（对应 <think> 块内容，无标签）",
+   "prompt": "[{\"role\":\"system\",...}]",
    "extra_data": {"ai_info": {"model": "八字深度", "suffix": "八字深度"}}, "time": ...}
 ]
 ```
@@ -125,9 +127,56 @@ AI-data 平台 downloaded 导出的每行结构：
 |------|------|--------|
 | `role='b'.time`（ms）| 请求时间戳 | `income_time` |
 | `role='a'.prompt` | 完整 messages JSON（含 system+user）| `messages` |
-| `role='a'.content` | 模型历史回复 | `old_response` |
+| `role='a'.content` | 模型历史回复（需后处理，见 §old_response 构建）| `old_response` |
+| `role='a'.ai_deep_content` | 推理过程原文（对应 `<think>` 块，**必须提取并前置**）| 合并进 `old_response` |
 | `role='b'._id` | 用户 ID | `user_id` |
 | `extra_data.ai_info.model` | 模型别名过滤字段 | — |
+
+#### ⚠️ old_response 构建：两步后处理（情况C 专属，顺序不可颠倒）
+
+> **背景**：AI-data 存储管道会对模型输出做两处变换，导致 `content` 与当前模型实际输出格式不一致：
+> 1. 将 `## 结论\n{text}\n\n---` 替换为 `<con>## 请输入替换内容 {text}</con>\n\n---` 存入 `content`
+> 2. 将推理过程单独存入 `ai_deep_content`（不含 `<think>` 标签）
+>
+> 若不还原，`old_response` 将缺少约 700~800 token 的推理链，导致 Phase 0 `avg_output_len` 严重低估（实测偏差 55%），进而使 Phase 2 起始 RPS 高估近 2 倍，引发灾难性过载。
+
+```python
+import re
+
+def build_old_response(content: str, ai_deep_content: str) -> str:
+    """
+    将 AI-data 存储格式还原为当前推理模型的实际输出格式。
+
+    Step 1: <con> → ## 结论（有则转，无则保留）
+    Step 2: 前置 <think>ai_deep_content</think>（非空时才加）
+
+    操作顺序不可颠倒：Step 1 先处理 content 内部结构，Step 2 在最前面拼推理链。
+    """
+    # Step 1: 还原 <con> 包装为 ## 结论
+    m = re.search(r'<con>(.*?)</con>', content, re.DOTALL)
+    if m:
+        inner = m.group(1).strip().replace('## 请输入替换内容', '').strip()
+        # </con> 之后原文已含 \n\n--- 分隔符，保留
+        content = content[:m.start()] + f'## 结论\n{inner}' + content[m.end():]
+
+    # Step 2: 前置推理链（仅非空时）
+    if ai_deep_content and ai_deep_content.strip():
+        content = f'<think>{ai_deep_content.strip()}</think>\n\n' + content
+
+    return content
+```
+
+还原后的 `old_response` 结构与当前推理模型输出**完全一致**：
+```
+<think>{ai_deep_content}</think>
+
+## 结论
+{conclusion_text}
+
+---
+
+## 一、详细分析...
+```
 
 #### 步骤0：探查别名分布（必做，避免数据丢失）
 
@@ -197,13 +246,19 @@ with open(JSONL_FILE, encoding="utf-8") as jf:
                 tz=dt_module.timezone(dt_module.timedelta(hours=8))
             ).replace(tzinfo=None)
 
+            # ⚠️ old_response 必须经过两步后处理：<con>→## 结论 + ai_deep_content 前置
+            # 直接用 content 会缺少推理链（约 700~800 token），Phase 0 严重低估 avg_output_len
+            raw_content      = assistant_msg.get("content", "") or ""
+            ai_deep_content  = assistant_msg.get("ai_deep_content", "") or ""
+            old_resp         = build_old_response(raw_content, ai_deep_content)
+
             rows_by_day.setdefault(income_dt.strftime("%Y-%m-%d"), []).append({
-                "income_time": income_dt.strftime("%Y-%m-%d %H:%M:%S"),
-                "prompt":      "",                              # benchmark 要求列存在，留空
-                "messages":    assistant_msg.get("prompt", ""),
-                "old_response": assistant_msg.get("content", "") or "",
-                "user_id":     user_msg.get("_id", ""),
-                "line_num":    line_num,
+                "income_time":  income_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "prompt":       "",                              # benchmark 要求列存在，留空
+                "messages":     assistant_msg.get("prompt", ""),
+                "old_response": old_resp,
+                "user_id":      user_msg.get("_id", ""),
+                "line_num":     line_num,
             })
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
@@ -411,7 +466,7 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 |------|--------|
 | 格式判断（入口）| `head -c 2 file.jsonl` 确认是 `{"` (情况A) 还是 `[{` (情况C) |
 | 转换后（步骤1，情况A）| 日期分片 CSV 已生成；DataConverter `_all.csv` 行数接近 `wc -l input.jsonl`（此时列只有 3 列，正常）|
-| 转换后（步骤1+1.5，情况C）| `_all.csv` 已是 6 列；`old_response` 非空率接近 100%；行数 ≥ 期望筛选量（若偏低，检查 MODEL_LIST_SET 是否漏别名）|
+| 转换后（步骤1+1.5，情况C）| `_all.csv` 已是 6 列；`old_response` 非空率接近 100%；行数 ≥ 期望筛选量（若偏低，检查 MODEL_LIST_SET 是否漏别名）；**若源数据含 `ai_deep_content`，`old_response` 中含 `<think>` 的比例应 ≈ `ai_deep_content` 非空率**（通常 80%+）；无 `<con>` 残留（应为 0%）|
 | 合并后（步骤1.5） | **若执行**：`_all.csv` 列变为 6 列；`old_response` 非空率应接近 100%（DataConverter **不**自动提取模型回复，需在步骤1.5 手动从 JSONL 按 `line_num` 回填：`line_num = jsonl_row_index + 1`，提取 `messages[role='a'].content`）；行数与日期分片之和一致。**若跳过（纯采样路径）**：确认下一步为 DataSampler，且全流程中不直接使用 `_all.csv` |
 | 采样后 | 峰值 RPM 是否符合预期；各段起止时间 |
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
@@ -462,6 +517,8 @@ data-processor convert -i data.jsonl -o output/ -m "xinghan-hepan-72b-v1-2,星�
 | `KeyError: 'prompt'`（benchmark 启动报错）| A/B | benchmark 工具强制要求 CSV 有 `prompt` 列 | 输出列必须包含空 `prompt`：`OUTPUT_COLS = ["income_time", "prompt", "messages", ...]` |
 | `KeyError: 'old_response'`（benchmark 启动报错）| A | 直接使用 DataConverter 输出的 `_all.csv`（3 列索引文件，无 `messages`/`old_response`）| 执行步骤1.5 合并日期分片覆盖写回，或手动合并 `_2026-MM-DD.csv` 文件 |
 | `old_response` 全为空（Phase 0 / 输出长度分析无结果）| A | DataConverter **不**提取模型历史回复，步骤1.5 的 `fillna("")` 只填空串不填内容 | 在步骤1.5 合并后从原始 JSONL 按 `line_num`（= jsonl行索引+1）提取 `messages[role='a'].content` 回填；同时覆盖写回日期分片 CSV，确保下游 DataSampler 采样文件也含 `old_response` |
+| Phase 0 `avg_output_len` 严重低估（与 Phase 1 实测偏差 >40%）| C | `old_response` 直接用 `content`，未调用 `build_old_response`，缺少 `ai_deep_content` 推理链（约 700~800 token）| 用 `build_old_response(content, ai_deep_content)` 两步后处理；重新运行 Phase 0 统计；以修正后 `avg_output_len` 重算 Phase 2 `START_RPS` |
+| `old_response` 含 `<con>` 残留（模型当前不再输出 `<con>`）| C | 未执行 Step 1（`<con>→## 结论`转换）| 检查 `build_old_response` 调用，确保 `re.search('<con>...</con>')` 步骤已执行 |
 
 ---
 
@@ -483,6 +540,7 @@ grep -E "DATA_FORMAT|INPUT_JSONL|OUTPUT_DIR|MODEL_LIST|DATASET_PATH" \
 | `DATA_FORMAT` | `standard` | messages 内联 dict-list（每行是 dict，guoxue/ziwei 早期版本），走 DataConverter pipeline |
 | `DATA_FORMAT` | `downloaded` | AI-data 平台 downloaded 导出格式（每行是 list），跳过 DataConverter/DataSampler，用情况C 自定义解析 |
 | `DATA_FORMAT` | `indexed` | messages 是 COS URL（chart 类型），先下载再转换 |
+| `DATA_FORMAT` | `agent_converted` | Agent 框架调用，prompt2 已由外部脚本预转化为 messages（如 `convert_chart_agent_prompt2.py`），不走 indexed/DataConverter 流程，直接用专属解析脚本制备（如 `prep_chart_agent_dataset.py`）。典型场景：xinghan-chart-32b-v1-1-agent |
 | `INPUT_JSONL` | — | 原始索引/数据 JSONL 路径（相对 PROJECT_DIR）|
 | `OUTPUT_DIR` | — | 处理产物输出目录 |
 | `MODEL_LIST` | — | 模型别名，逗号分隔，必须覆盖所有写法（⚠️ 高频踩坑）|

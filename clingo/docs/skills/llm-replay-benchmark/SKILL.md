@@ -47,7 +47,8 @@ JSONL 实测 RPM: 16      ← 数据来源，真实形态
 
 ```bash
 VENV="/mnt/ai-infra/users/wnd/workspace/repo/SpecForge/.venv/bin"
-OUTDIR="logs/${MODEL_NAME}_peak_replay_$(date +%Y%m%d_%H%M%S)"
+# MODEL_NAME = 算法提供的完整模型名，作为 logs/ 第一层子目录
+OUTDIR="logs/${MODEL_NAME}/${MODEL_NAME}_peak_replay_$(date +%Y%m%d_%H%M%S)"
 
 "${VENV}/benchmark" \
   --exp-name "${MODEL_NAME}_peak_replay_${TARGET_RPM}rpm" \
@@ -58,7 +59,7 @@ OUTDIR="logs/${MODEL_NAME}_peak_replay_$(date +%Y%m%d_%H%M%S)"
   --no-kvcache \
   --max-completion-tokens ${MAX_TOKENS} \
   --output-dir "${OUTDIR}" \
-  2>&1 | tee "logs/${MODEL_NAME}_replay_$(date +%Y%m%d_%H%M%S).log"
+  2>&1 | tee "logs/data-pipeline/${MODEL_NAME}_replay_$(date +%Y%m%d_%H%M%S).log"
 ```
 
 **关键参数说明**：
@@ -199,7 +200,7 @@ tail -f logs/data-pipeline/<model>_8tp_replay_<timestamp>.log
 
 **触发时机**：回放实验完成（benchmark 工具打印结果统计）后，**在进行 benchmark-result-analysis 分析之前**，写入实验目录 README.md。
 
-**写入路径**：`logs/<exp_dir>/README.md`
+**写入路径**：`logs/<model-full-name>/<exp_dir>/README.md`
 
 **模板**：
 

@@ -37,6 +37,10 @@ description: Use when qps-peak-finder three phases are complete and you need to 
 ```python
 import pandas as pd, glob, os, json
 
+# benchmark 写入 CSV 的特殊状态码（与 send_requests.py 定义一致）
+STATUS_CANCELLED_BY_SIGINT    = -1   # 用户 Ctrl-C 中止
+STATUS_CANCELLED_BY_TIMELIMIT = -5   # --request-time-limit 到期，队列中未发出的缓冲请求
+
 def phase1_peak_metrics(phase1_peak_dir: str, max_rps_estimate: float,
                         decode_throughput: float) -> dict:
     """
@@ -47,7 +51,14 @@ def phase1_peak_metrics(phase1_peak_dir: str, max_rps_estimate: float,
     csv_files = [f for f in glob.glob(os.path.join(phase1_peak_dir, "*.csv"))
                  if not f.endswith(".argv.csv")]
     df = pd.read_csv(csv_files[0], low_memory=False)
-    df_ok = df[df["status"] == 200].copy()
+
+    # ⚠️ 必须先过滤掉"未发出"记录，再计算成功率
+    # NUM_REQUESTS 通常设为 QPS × 时长 × 1.1~1.2（缓冲系数），测试结束时
+    # 未发出的缓冲请求状态为 -5（TIMELIMIT），不是真实失败，分母不应包含它们。
+    # 不过滤会导致成功率虚低（如 Phase 1 con30 出现 0.2%、Phase 2/3 出现 83~91%）。
+    df_sent = df[~df["status"].isin([STATUS_CANCELLED_BY_SIGINT,
+                                      STATUS_CANCELLED_BY_TIMELIMIT])].copy()
+    df_ok = df_sent[df_sent["status"] == 200].copy()
 
     def parse_metrics(tl_str):
         try:
@@ -69,12 +80,13 @@ def phase1_peak_metrics(phase1_peak_dir: str, max_rps_estimate: float,
     mean_e2e = df_ok["e2e_s"].mean()
     l_server = max_rps_estimate * mean_e2e   # Little's Law: L = λ × W
 
-    success_rate = round(len(df_ok) / len(df) * 100, 1)
+    # 成功率 = 实际发出且成功 / 实际发出（已排除 TIMELIMIT/SIGINT）
+    success_rate = round(len(df_ok) / len(df_sent) * 100, 1) if len(df_sent) > 0 else 0.0
 
     return {
         "max_rps_estimate":         round(max_rps_estimate, 4),
         "decode_throughput":        decode_throughput,
-        "success_rate":             success_rate,     # 峰值档成功率（通常 <60%；其余请求超时未计入延迟）
+        "success_rate":             success_rate,     # 实际发出请求的成功率（已过滤 TIMELIMIT/SIGINT）
         "ttfs_p90_s":               round(df_ok["ttfs_s"].quantile(0.90), 3),
         "e2e_p90_s":                round(df_ok["e2e_s"].quantile(0.90), 2),
         "mean_e2e_s":               round(mean_e2e, 2),
@@ -84,6 +96,8 @@ def phase1_peak_metrics(phase1_peak_dir: str, max_rps_estimate: float,
 
 > **为什么用峰值档而非饱和确认档**：饱和确认档（吞吐翻倍后）已严重过载，其延迟数据是崩溃状态，不代表正常承载能力。峰值档是服务能达到的最高吞吐点，其 TTFS/E2E 展示的是"硬件上限时真实发生了什么"，更直观体现超出 SLA 的原因。  
 > L = λ × W = max_rps_estimate（吞吐估算 req/s）× mean E2E（峰值档平均全链路延迟）
+>
+> **关于 success_rate 的常见陷阱**：benchmark 脚本预载 `NUM_REQUESTS = ceil(QPS × 时长 × buffer)` 条，测试时间到时未发出的缓冲请求写入 CSV 状态为 `-5`（TIMELIMIT）。若直接用 `len(df_ok)/len(df)`，对 Phase 1 会得到 0.x%，对 Phase 2/3 会得到 83~91%，均为误导性数值。`qps-sweep-comparison` 工具（`single_exp.py` 第 242~243 行）已正确过滤，本模板同步对齐。
 
 ---
 
@@ -92,19 +106,20 @@ def phase1_peak_metrics(phase1_peak_dir: str, max_rps_estimate: float,
 Phase 2（`rpsX.XXXX/`）和 Phase 3（`qpsX.XXXX/`）均为 `--request-rate` 模式，格式完全兼容。
 
 ```bash
-MODEL="xinghan-chart-32b-v1-1-agent"   # 按实际模型名替换
+MODEL_NAME="xinghan-chart-32b-v1-1-agent"   # 完整模型名（算法提供），作为 logs/ 第一层子目录
+MODEL="chart-32b-agent"                       # 实验命名用短名
 TP="8tp"
 DATE=$(date +%Y%m%d)
-MERGED="logs/${MODEL}-${TP}-phase23_merged_${DATE}"
+MERGED="logs/${MODEL_NAME}/${MODEL}-${TP}-phase23_merged_${DATE}"
 mkdir -p "$MERGED"
 
 # Phase 2 档位
-for d in logs/${MODEL}-${TP}-phase2_*/rps*/; do
+for d in logs/${MODEL_NAME}/${MODEL}-${TP}-phase2_*/rps*/; do
     [ -d "$d" ] && cp -rl "$d" "$MERGED/$(basename $d)"
 done
 
 # Phase 3 档位
-for d in logs/${MODEL}-${TP}-phase3_*/qps*/; do
+for d in logs/${MODEL_NAME}/${MODEL}-${TP}-phase3_*/qps*/; do
     [ -d "$d" ] && cp -rl "$d" "$MERGED/$(basename $d)"
 done
 
@@ -120,13 +135,13 @@ echo "合并完成，共 $(ls $MERGED | wc -l) 个档位"
 创建 YAML 配置后调用 `qps-sweep-comparison` Skill：
 
 ```yaml
-# configs/models/<model>/<tp>_peak_finder_analysis.yaml
+# configs/models/<model-full-name>/<tp>_peak_finder_analysis.yaml
 groups:
   - label: "<model> <TP>×1实例"
-    dir: "logs/<model>-<tp>-phase23_merged_<date>"
+    dir: "logs/<model-full-name>/<model>-<tp>-phase23_merged_<date>"
   # 多部署对比时追加：
   # - label: "<model> <TP2>×1实例"
-  #   dir: "logs/<model>-<tp2>-phase23_merged_<date>"
+  #   dir: "logs/<model-full-name>/<model>-<tp2>-phase23_merged_<date>"
 
 x_key: request_rate
 output_dir: "results/<model>_peak_finder_<date>"

@@ -18,7 +18,7 @@
 
 | 服务名 | 模型 | 迁移策略 | 总卡数 | 迁移进度 | 评估状态 | 算法负责 | 业务归属 |
 |---|---|---|---|---|---|---|---|
-| `tianji-query-safety-4b-v1-1-cmic` | tianji-querysafety-4b-v2-3 | 直接迁移·裸模型部署 | 32（8副本×4卡）| 待机器部署 | ✅ 测试通过 | 刘尧 | 天玑-Query安全改写 |
+| `tianji-query-safety-4b-v1-1-cmic` | tianji-querysafety-4b-v2-3 | 直接迁移·裸模型部署 | 32（8副本×4卡）| ✅ 已完成 | ✅ 测试通过 | 刘尧 | 天玑-Query安全改写 |
 | `xinghan-ziwei-32b-v1-cm` | xinghan-ziwei-32b-v1-1 | 直接迁移·分离部署 | 16（2副本×8卡）| ✅ 已完成 | ✅ 部署+压测通过 | 刘奇 | 紫微-普通-32B |
 | `ziwei-intention-twostep-8b-v1-cm` | ziwei-intention-twostep-8b-v1 | 直接迁移·裸模型部署 | 4（4副本×1卡）| ✅ 已完成 | ✅ 部署完成 | 刘奇 | 算法内部服务 |
 
@@ -26,8 +26,8 @@
 
 | 服务名 | 模型 | 迁移策略 | 总卡数 | 迁移进度 | 当前阻塞 | 算法负责 | 业务归属 |
 |---|---|---|---|---|---|---|---|
-| `xinghan-deploy-v1-1-agent` | xinghan-chart-32b-v1-1-agent | 延后迁移·混部，待工程改造 | 24（3副本×8卡）| 待切流 | 裸模型回复与老服务不一致，工程需改造 | 黄继豪 | 星盘-普通-32B |
-| `xinghan-deploy-v1-1-dpagent` | — | 延后迁移·混部，待工程改造 | 2（2副本×1卡）| 待开始 | 工程组改造中 | 黄继豪 | 星盘-普通-32B |
+| `xinghan-deploy-v1-1-agent` | xinghan-chart-32b-v1-1-agent | 延后迁移·混部，待工程改造 | 24（3副本×8卡）| 待切流 | ✅ 评估完成（V2，8TP 回放 100%）；工程改造进行中 | 黄继豪 | 星盘-普通-32B |
+| `xinghan-deploy-v1-1-dpagent` | — | ~~延后迁移~~ | 2（2副本×1卡）| ❌ 取消 | 算法确认无需部署 | 黄继豪 | 星盘-普通-32B |
 | `ceceai-model-vllm-intent-recognition-v1-1` | intent-recognition-v1.1 | 延后迁移·混部，待工程改造 | 2（2副本×1卡）| 待开始 | 算法内部服务，八字/星盘通用 | 刘昕洋 | 玄学工具内部-意图识别 |
 
 ---

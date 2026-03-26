@@ -64,9 +64,9 @@ clingo/docs/
 
 | 模型 | 硬件 | ideal_rps | 业务峰值 | QPS评估 | 回放测试 | EVAL_REPORT | 状态 |
 |------|------|-----------|---------|---------|---------|-------------|------|
-| xinghan-ziwei-32b-v1 | 8×L20 × 2实例 | 1.59 req/s | 52 RPM | ✅ | ✅ | ⏳ 待生成 | 🟡 |
+| xinghan-ziwei-32b-v1 | 8×L20 × 2实例 | 1.59 req/s (95.4 RPM) | 52 RPM | ✅ | ✅ 99.97% | ✅ | 🟢 已交付 |
 | xinghan-hepan-72b-v1-2 | 8×L20 | — | — | ✅ | ✅ | ✅ | 🟢 已交付 |
-| tianji-querysafety-4b-v2-3 | 4TP × 8实例 | 7.86 RPS | 3584 RPM | ✅ | ✅ 100% | ⏳ 待补档 | 🟡 |
+| tianji-querysafety-4b-v2-3 | 4TP × 8实例 | 7.86 RPS (471 RPM/实例) | 3524 RPM (7日峰) | ✅ | ✅ 100% | ✅ | 🟢 已交付 |
 | xinghan-chart-32b-v1-1-agent | 8×L20（8TP）| 3.83 req/s (230 RPM) | 118 RPM | ✅ V2 | ✅ 100% | ✅ | 🟢 已交付 |
 | xinghan-guoxue-72b-v1-2-reason (vanilla) | 8×L20 / 4×H20 | L20: 0.2114 / H20: 0.5878 req/s | 256 RPM | ✅ | ✅ 99.89% | ✅ V2 | 🟢 已交付 |
 | xinghan-guoxue-72b-v1-2-reason (Eagle3) | 8×L20 | 0.3169 req/s (+50%) | 256 RPM | ✅ | — | ⏳ 待追加章节 | 🟡 |

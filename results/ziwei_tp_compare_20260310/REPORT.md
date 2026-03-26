@@ -131,8 +131,8 @@
 ### 6.2 原始数据来源
 
 ```
-logs/ziwei_8tp_qps_20260310_all/  (TP8，30 个子目录)
-logs/ziwei_4tp_qps_20260310_all/  (TP4，33 个子目录)
+logs/archive/ziwei_8tp_qps_20260310_all/  (TP8，30 个子目录)
+logs/archive/ziwei_4tp_qps_20260310_all/  (TP4，33 个子目录)
 ```
 
 ---

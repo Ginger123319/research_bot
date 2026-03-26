@@ -1,7 +1,7 @@
 # 项目文档中心
 
 > 模型部署迁移评估工程 — 文档索引  
-> 更新：2026-03-13
+> 更新：2026-03-26
 
 ## 项目定位
 
@@ -18,11 +18,11 @@
     ↓
 远端服务连通性验证
     ↓
-流量回放测试（真实请求回放）
+QPS Peak Finder（三阶段：饱和探测 → 自适应逼近 → 生产网格验证）
     ↓
-QPS 拐点扫描 & 压力测试
+流量回放测试（真实请求回放，SLA 验证）
     ↓
-结果分析 & 量化报告
+结果分析 & 量化报告（EVAL_REPORT.md）
 ```
 
 这套链路针对每个新模型**完全可重复**，是本工程 Skill 化的核心价值。
@@ -34,6 +34,9 @@ QPS 拐点扫描 & 压力测试
 ```
 clingo/docs/
 ├── README.md                    # 本文件，项目概览 + 文档索引
+├── ai_data/                     # 模型数据结构说明（线上日志格式分析）
+│   ├── xinghan-chart-32b-v1-1-agent-data-structure.md
+│   └── xinghan-guoxue-72b-v1-2-reason-data-structure.md
 ├── planning/
 │   ├── need-todo-idea.md        # 需求 / 待办 / 想法（规划讨论文档）
 │   └── skills-roadmap.md        # Skill 建设路线图（候选清单 + 优先级）
@@ -45,40 +48,47 @@ clingo/docs/
     ├── traffic-dataset-prep/     # ✅ 数据集构建 Skill
     ├── llm-deployment-docker/    # ✅ 本地 Docker 部署 Skill
     ├── llm-service-probing/      # ✅ 服务能力探测 Skill
-    ├── qps-benchmark-sweep/      # ✅ QPS 扫描 Skill
+    ├── qps-benchmark-sweep/      # ✅ QPS 扫描 Skill（旧版，已被 peak-finder 替代）
+    ├── qps-peak-finder/          # ✅ QPS Peak Finder Skill（三阶段自适应）
+    ├── qps-peak-finder-analysis/ # ✅ Peak Finder 结果分析 + REPORT 生成 Skill
     ├── qps-sweep-comparison/     # ✅ QPS 多组对比分析 Skill
     ├── llm-replay-benchmark/     # ✅ 流量回放 Skill
-    ├── benchmark-result-analysis/# ✅ 结果分析 Skill
-    └── model-evaluation-workflow/# ✅ 顶层流程编排 Skill
+    ├── benchmark-result-analysis/# ✅ 单批次结果分析 Skill
+    ├── model-eval-report/        # ✅ 交付报告生成 Skill（EVAL_REPORT.md）
+    └── model-evaluation-workflow/# ✅ 顶层流程编排 Skill（Step 0~7）
 ```
 
-> 待建：`workflow/reporting-template.md`、`models/` 模型档案目录（见 planning/need-todo-idea.md）
+---
+
+## 已完成评估的模型
+
+| 模型 | 硬件 | ideal_rps | 业务峰值 | QPS评估 | 回放测试 | EVAL_REPORT | 状态 |
+|------|------|-----------|---------|---------|---------|-------------|------|
+| xinghan-ziwei-32b-v1 | 8×L20 × 2实例 | 1.59 req/s | 52 RPM | ✅ | ✅ | ⏳ 待生成 | 🟡 |
+| xinghan-hepan-72b-v1-2 | 8×L20 | — | — | ✅ | ✅ | ✅ | 🟢 已交付 |
+| tianji-querysafety-4b-v2-3 | 4TP × 8实例 | 7.86 RPS | 3584 RPM | ✅ | ✅ 100% | ⏳ 待补档 | 🟡 |
+| xinghan-chart-32b-v1-1-agent | 8×L20（8TP）| 3.83 req/s (230 RPM) | 118 RPM | ✅ V2 | ✅ 100% | ✅ | 🟢 已交付 |
+| xinghan-guoxue-72b-v1-2-reason (vanilla) | 8×L20 / 4×H20 | L20: 0.2114 / H20: 0.5878 req/s | 256 RPM | ✅ | ✅ 99.89% | ✅ V2 | 🟢 已交付 |
+| xinghan-guoxue-72b-v1-2-reason (Eagle3) | 8×L20 | 0.3169 req/s (+50%) | 256 RPM | ✅ | — | ⏳ 待追加章节 | 🟡 |
+| lingyu-235b-A22b-v9-2 | — | — | 758 RPM | ✅ | ❌ 无数据 | ⏳ 待生成 | 🟡 |
 
 ---
 
-## 已跑通的模型清单
-
-| 模型 | 类型 | 部署配置 | 状态 |
-|------|------|----------|------|
-| xinghan-ziwei-32b-v1 | 通用对话 | TP=4, GPU 1,3,4,5, :5290 | ✅ 全流程完成（QPS/回放/报告）|
-| ziwei-intention-twostep-8b | 意图分类/路由 | TP=1, GPU 7, :5291 | ✅ 全流程完成 |
-| xinghan-hepan-72b-v1-2 | 通用对话 | TP=4（NVLink 机器）| ✅ 全流程完成（150 RPM 回放，QPS 0.80 req/s）|
-| tianji-querysafety-4b-v2-3 | 安全拦截 | DP=4 TP=1（PCIe 推荐）, :8361 | ✅ 全流程完成（回放 100%，QPS 4TP vs 4DP 对比）|
-
----
-
-## Skill 体系现状（8 个已完成）
+## Skill 体系现状（11 个已完成）
 
 | Skill | 用途 | 状态 |
 |-------|------|------|
-| `traffic-dataset-prep` | JSONL 日志 → 压测 CSV（6步管道）| ✅ 已验证 |
-| `llm-deployment-docker` | Docker 部署 + 预检 + 健康检查 | ✅ 已验证 |
-| `llm-service-probing` | 服务能力自动探测 + 模型类型判断 | ✅ 已验证 |
-| `qps-benchmark-sweep` | QPS 拐点扫描脚本设计与执行 | ✅ 已验证 |
-| `qps-sweep-comparison` | 多组 QPS 结果对比可视化 + SLA 评估 | ✅ 已验证 |
-| `llm-replay-benchmark` | 真实流量回放 + 峰值验证 | ✅ 已验证 |
-| `benchmark-result-analysis` | 离线分析 + HTML/PNG + REPORT 骨架 | ✅ 已验证 |
-| `model-evaluation-workflow` | 新模型接入顶层编排（两阶段+人工断点）| ✅ 完成 |
+| `traffic-dataset-prep` | JSONL 日志 → 压测 CSV（6 步管道，含 agent_converted 格式）| ✅ |
+| `llm-deployment-docker` | Docker 部署 + 预检 + 健康检查 | ✅ |
+| `llm-service-probing` | 服务能力自动探测 + 模型类型判断 | ✅ |
+| `qps-benchmark-sweep` | QPS 多档扫描（固定步进，适合已知拐点区间）| ✅ |
+| `qps-peak-finder` | QPS Peak Finder 三阶段自适应（未知拐点首选）| ✅ |
+| `qps-peak-finder-analysis` | Phase 1~3 数据合并、容量曲线、REPORT.md 生成 | ✅ |
+| `qps-sweep-comparison` | 多组 QPS 结果对比可视化 + SLA 评估 | ✅ |
+| `llm-replay-benchmark` | 真实流量回放 + 峰值 SLA 验证 | ✅ |
+| `benchmark-result-analysis` | 单批次离线分析 + HTML/PNG + REPORT 骨架 | ✅ |
+| `model-eval-report` | 交付报告生成（EVAL_REPORT.md，含部署建议）| ✅ |
+| `model-evaluation-workflow` | 新模型接入顶层编排（Step 0~7，含断点检查）| ✅ |
 
 ---
 
@@ -88,3 +98,4 @@ clingo/docs/
 - Skill 建设路线图 → [`planning/skills-roadmap.md`](planning/skills-roadmap.md)
 - 新模型接入流程 → [`workflow/model-onboarding.md`](workflow/model-onboarding.md)
 - 设计规格文档 → [`designs/`](designs/)
+- 模型数据结构说明 → [`ai_data/`](ai_data/)

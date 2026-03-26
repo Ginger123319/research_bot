@@ -1,11 +1,11 @@
 #!/bin/bash
-# Phase 2a 自动收敛循环 — xinghan-guoxue-72b-v1-2-reason V2
+# Phase 2 自适应逼近 — xinghan-guoxue-72b-v1-2-reason EAGLE3
 #
-# SLA: TTFS P90 ≤ 1.5s, E2E P90 ≤ 180s
-# Bracket 几何中点精查，宽度 < 3% 时收敛。
+# eagle3 投机解码（EAGLE3-3-1-4）；8×L20；SLA: TTFS P90 ≤ 1.5s, E2E P90 ≤ 180s
+# bracket 几何中点精查，宽度 < 3% 时收敛。
 #
 # 用法：
-#   PEAK_RPS=<peak_rps> START_RPS=<max_rps×1.2> bash scripts/benchmark/run_phase2_auto_guoxue8tp_v2.sh
+#   PEAK_RPS=<peak> START_RPS=<max_rps×1.2> bash scripts/benchmark/run_phase2_auto_guoxue_eagle3.sh
 #   续跑：PEAK_RPS=X START_RPS=X INIT_LO=X INIT_HI=X bash ...
 
 set -euo pipefail
@@ -21,12 +21,12 @@ TARGET_MODEL="xinghan-guoxue-72b-v1-2-reason"
 TOKENIZER="/mnt/ai-llm/l83v2-G1-400"
 DATASET_PATH="${PROJECT_DIR}/datas/output_guoxue_v2/xinghan-guoxue-72b-v1-2-reason_selected_combined_2days_peak_poisson_256_stitched.csv"
 MAX_COMPLETION_TOKENS=4096
-DURATION_SECS=3600    # 1h/档（推理模型长输出，需充分稳态 + 压低方差）
-COOLDOWN_SECS=900     # 15min 冷却（E2E P90 ~300s 的模型，需 ≥ 3× E2E 才能排空积压）
+DURATION_SECS=3600    # 1h/档（avg_output_len≈1386 → max(1200, 1386×2.5=3465) → 取 3600）
+COOLDOWN_SECS=900     # 15min 冷却（E2E P90 预计 ~120~180s，需 ≥ 3× E2E 才能排空积压）
 
 # ── SLA 阈值 ─────────────────────────────────────────────────
-TTFS_P90_LIMIT=1.5    # 1500ms
-E2E_P90_LIMIT=180.0   # 180s（V2 更新）
+TTFS_P90_LIMIT=1.5
+E2E_P90_LIMIT=180.0
 
 # ── Phase 1 输出（由调用方传入）────────────────────────────────
 PEAK_RPS="${PEAK_RPS:-0}"
@@ -39,21 +39,20 @@ if [[ -z "${START_RPS}" && "${PEAK_RPS}" == "0" ]]; then
 fi
 
 TIMESTAMP="$(date +%Y%m%d_%H%M)"
-OUTPUT_BASE="${PROJECT_DIR}/logs/guoxue-v2-phase2_${TIMESTAMP}"
+OUTPUT_BASE="${PROJECT_DIR}/logs/guoxue-v2-eagle3-phase2_${TIMESTAMP}"
 CHECKPOINT="${OUTPUT_BASE}/phase2_checkpoint.md"
-PHASE3_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh"
+PHASE3_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase3_grid_guoxue_eagle3.sh"
 mkdir -p "${OUTPUT_BASE}"
 
 # bracket 区间（可从环境变量覆盖续跑）
 LO_RPS="${INIT_LO:-}"
 HI_RPS="${INIT_HI:-}"
-LAST_PASS_RPS=""   # 追踪最后一次 PASS 档，供 EXIT trap 使用
+LAST_PASS_RPS=""
 
-PRODUCTION_RPS=0.05   # 安全托底（远低于历史 ideal=0.2494），防止步进下探至接近0
+# production_rps：上线 Grafana 实测 0.195 req/s（20 实例 × 0.195 = 3.9 RPS 集群总量）
+PRODUCTION_RPS=0.195
 
 # ── EXIT trap：兜底写入 checkpoint ───────────────────────────────
-# 无论正常收敛、达到 MAX_ITERS 还是被 kill/崩溃，退出时必然执行。
-# 正常收敛时 checkpoint 已存在，trap 直接返回。
 write_exit_checkpoint() {
     if [[ -f "${CHECKPOINT}" ]]; then return; fi
     echo ""
@@ -66,7 +65,7 @@ lo=float('${LAST_PASS_RPS}'); hi=float('${HI_RPS}')
 print(f'{(hi-lo)/lo*100:.2f}%')" 2>/dev/null || echo "—")
         fi
         cat > "${CHECKPOINT}" << EOF
-# Phase 2 检查点 — guoxue-72b V2 [EXIT_TRAP]
+# Phase 2 检查点 — guoxue-72b EAGLE3 [EXIT_TRAP]
 
 > ⚠️ 脚本意外退出（bracket 未收敛至 <3%），以最后 PASS 档为 ideal_rps。
 
@@ -82,7 +81,7 @@ print(f'{(hi-lo)/lo*100:.2f}%')" 2>/dev/null || echo "—")
 ## Phase 3 启动命令
 \`\`\`bash
 IDEAL_RPS=${LAST_PASS_RPS} PRODUCTION_RPS=${PRODUCTION_RPS} \\
-  bash scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh
+  bash scripts/benchmark/run_phase3_grid_guoxue_eagle3.sh
 \`\`\`
 EOF
         echo "  ✅ 兜底 checkpoint 已写入: ${CHECKPOINT}"
@@ -95,18 +94,18 @@ EOF
 trap write_exit_checkpoint EXIT
 
 echo "========================================================"
-echo "Phase 2a 自动收敛 — guoxue-72b V2"
+echo "Phase 2 自适应逼近 — guoxue-72b EAGLE3"
 echo "  peak_rps=${PEAK_RPS}  start_rps=${START_RPS}"
 echo "  duration=${DURATION_SECS}s  cooldown=${COOLDOWN_SECS}s"
 echo "  SLA: TTFS P90≤${TTFS_P90_LIMIT}s  E2E P90≤${E2E_P90_LIMIT}s"
 echo "  bracket: LO=${LO_RPS:-未知}  HI=${HI_RPS:-未知}"
-echo "  production_rps=${PRODUCTION_RPS}（托底）"
+echo "  production_rps=${PRODUCTION_RPS}（Phase 3 网格起始 / 托底）"
+echo "  endpoint: ${SERVER_URL}"
 echo "  输出目录: ${OUTPUT_BASE}"
 echo "========================================================"
 
 # 设置起始 RPS
 if [[ -n "${LO_RPS}" || -n "${HI_RPS}" ]]; then
-    # 续跑：用已有 bracket 几何中点
     CURRENT_RPS=$(${PYTHON} -c "
 import math
 lo = float('${LO_RPS}') if '${LO_RPS}' else None
@@ -133,6 +132,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
     echo "────────────────────────────────────────────────────────"
     echo "  第 ${iter} 轮  RPS=${CURRENT_RPS}  num_prompts=${NUM_PROMPTS}"
     echo "  bracket: LO=${LO_RPS:-未知}  HI=${HI_RPS:-未知}"
+    echo "  开始时间: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "────────────────────────────────────────────────────────"
 
     if [[ -d "${LEVEL_DIR}" ]] && ls "${LEVEL_DIR}"/*.csv 2>/dev/null | grep -qv "argv"; then
@@ -141,7 +141,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
         mkdir -p "${LEVEL_DIR}"
         cd "${LLM_BENCHMARK_ROOT}"
         "${PYTHON}" -m llm_benchmark.benchmark.benchmark \
-            --exp-name       "guoxue_v2_phase2_rps${RPS_TAG}" \
+            --exp-name       "guoxue_eagle3_phase2_rps${RPS_TAG}" \
             --dataset-path   "${DATASET_PATH}" \
             --url            "${SERVER_URL}" \
             --model          "${TARGET_MODEL}" \
@@ -156,6 +156,8 @@ for iter in $(seq 1 ${MAX_ITERS}); do
             || echo "⚠️ rps=${CURRENT_RPS} 异常，记录后继续"
         cd "${PROJECT_DIR}"
     fi
+
+    echo "  完成时间: $(date '+%Y-%m-%d %H:%M:%S')"
 
     # ── 分析本档 SLA ──────────────────────────────────────────
     METRICS=$(${PYTHON} "${ANALYZE}" \
@@ -184,7 +186,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
         fi
     fi
 
-    # ── 收敛判断 & 下一档计算（bracket 更新后重新计算，不复用 analyze 的 NEXT_RPS）─
+    # ── 收敛判断（bracket 更新后重新计算，不复用 analyze 的 NEXT_RPS）────
     if [[ -n "${LO_RPS}" && -n "${HI_RPS}" ]]; then
         CONVERGED=$(${PYTHON} -c "
 lo=float('${LO_RPS}'); hi=float('${HI_RPS}')
@@ -193,10 +195,8 @@ print('yes' if (hi-lo)/lo < 0.03 else 'no')
         if [[ "${CONVERGED}" == "yes" ]]; then
             echo ""
             echo "✅ bracket 收敛！宽度 < 3%，ideal_rps = ${LO_RPS}"
-            echo ""
-            # 写 Phase 2 检查点
             cat > "${CHECKPOINT}" << EOF
-# Phase 2 检查点 — guoxue-72b V2 收敛
+# Phase 2 检查点 — guoxue-72b EAGLE3 收敛
 
 | 指标 | 值 |
 |------|-----|
@@ -209,18 +209,18 @@ print('yes' if (hi-lo)/lo < 0.03 else 'no')
 ## Phase 3 启动命令
 \`\`\`bash
 IDEAL_RPS=${LO_RPS} PRODUCTION_RPS=${PRODUCTION_RPS} \\
-  bash scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh
+  bash scripts/benchmark/run_phase3_grid_guoxue_eagle3.sh
 \`\`\`
 EOF
             echo "  ▶ 下一步："
             echo "    IDEAL_RPS=${LO_RPS} PRODUCTION_RPS=${PRODUCTION_RPS} \\"
-            echo "      bash scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh"
+            echo "      bash scripts/benchmark/run_phase3_grid_guoxue_eagle3.sh"
             break
         fi
 
-        # bracket 已建立，几何中点
+        # bracket 已建立，几何中点（bracket 更新后重算，不复用 analyze 打印值）
         CURRENT_RPS=$(${PYTHON} -c "import math; print(f'{math.sqrt(float(\"${LO_RPS}\")*float(\"${HI_RPS}\")):.4f}')")
-        echo "  ▶ bracket 几何中点: ${CURRENT_RPS}"
+        echo "  ▶ bracket 几何中点（已更新）: ${CURRENT_RPS}"
 
     else
         # bracket 未建立，从 analyze 的建议读取下一档
@@ -229,7 +229,6 @@ EOF
             CURRENT_RPS="${NEXT_BY_ANALYZE}"
             echo "  ▶ 比例步进（无 bracket）: ${CURRENT_RPS}"
         else
-            # fallback：若 SLA PASS 则上调 10%，若 FAIL 则下调至 peak_rps × 0.8
             if [[ "${SLA_PASS}" == "PASS" ]]; then
                 CURRENT_RPS=$(${PYTHON} -c "print(f'{float(\"${CURRENT_RPS}\")*1.1:.4f}')")
             else
@@ -245,7 +244,7 @@ EOF
             LO_RPS="${PRODUCTION_RPS}"
             LAST_PASS_RPS="${PRODUCTION_RPS}"
             cat > "${CHECKPOINT}" << EOF
-# Phase 2 检查点 — guoxue-72b V2 [PRODUCTION_FLOOR]
+# Phase 2 检查点 — guoxue-72b EAGLE3 [PRODUCTION_FLOOR]
 
 > ⚠️ 所有探测档均 FAIL，以 production_rps 托底。
 
@@ -259,12 +258,9 @@ EOF
 ## Phase 3 启动命令
 \`\`\`bash
 IDEAL_RPS=${PRODUCTION_RPS} PRODUCTION_RPS=${PRODUCTION_RPS} \\
-  bash scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh
+  bash scripts/benchmark/run_phase3_grid_guoxue_eagle3.sh
 \`\`\`
 EOF
-            echo "  ▶ 下一步："
-            echo "    IDEAL_RPS=${PRODUCTION_RPS} PRODUCTION_RPS=${PRODUCTION_RPS} \\"
-            echo "      bash scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh"
             break
         fi
     fi

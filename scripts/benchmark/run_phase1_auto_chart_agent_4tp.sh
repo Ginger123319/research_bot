@@ -1,12 +1,15 @@
 #!/bin/bash
-# Phase 1 自动饱和探测循环 — xinghan-ziwei-32b-v1 8TP（复验）
+# Phase 1 自动饱和探测循环 — xinghan-chart-32b-v1-1-agent 4TP（Agent 数据集）
 #
-# 从 INIT_CON 开始，每档翻倍或 +10，直至吞吐不再增长（< 1%）。
-# 饱和后自动打印 Phase 2 启动参数并直接触发 Phase 2。
+# 数据集: datas/output_chart_agent/_all.csv（40,311 条 Agent 调用，avg_out=452 tokens）
+# Phase 0 结果: avg_output_len=452 tokens → TIME_LIMIT=1130s  COOLDOWN=226s
 #
 # 用法：
-#   bash scripts/benchmark/run_phase1_auto_ziwei8tp.sh
-#   INIT_CON=50 bash scripts/benchmark/run_phase1_auto_ziwei8tp.sh  # 断点续跑
+#   bash scripts/benchmark/run_phase1_auto_chart_agent_4tp.sh
+#   INIT_CON=50 bash scripts/benchmark/run_phase1_auto_chart_agent_4tp.sh  # 从指定并发续跑
+#
+# Phase 1 结束后，按打印的参数执行：
+#   PEAK_RPS=X.XXXX START_RPS=X.XXXX bash scripts/benchmark/run_phase2_auto_chart_agent_4tp.sh
 
 set -euo pipefail
 
@@ -14,34 +17,38 @@ PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
 SATURATE="${PROJECT_DIR}/scripts/benchmark/run_phase1_saturation.sh"
-PHASE2_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase2_auto_ziwei8tp.sh"
 
 # ── 模型参数 ────────────────────────────────────────────────
-SERVER_URL="https://infer-test.geniuworks.com/infra-xinghan-ziwei-p32b-v1-test/v1/chat/completions"
-TARGET_MODEL="ignore-model-name"
-TOKENIZER="/mnt/ai-llm/xinghan-ziwei-32b-v1"
-DATASET_PATH="${PROJECT_DIR}/datas/output_ziwei/xinghan-ziwei-32b-v1-1_selected_combined_3days_peak_poisson_100_stitched.csv"
+SERVER_URL="https://infer.geniuworks.com/infra-opti-xinghan-chart-p32b-v1-agent/v1/chat/completions"
+TARGET_MODEL="/mnt/ai-llm/chartv5"
+TOKENIZER="/mnt/ai-llm/chartv5"
+DATASET_PATH="${PROJECT_DIR}/datas/output_chart_agent/xinghan-chart-32b-v1-1-agent_all.csv"
 MAX_COMPLETION_TOKENS=4096
-TIME_LIMIT_SECS=300
-AVG_OUTPUT_LEN=180     # Phase 1 历史实测均值（ziwei 数据集，checkpoint 显示 ~177-183 tokens）
 
-# ── 初始并发（con=25 已完成，从 con=50 续跑）────────────────
-INIT_CON="${INIT_CON:-50}"
-TIMESTAMP="20260319"
-OUTPUT_BASE="${PROJECT_DIR}/logs/ziwei-32b-8tp-phase1_${TIMESTAMP}"
+# ── Phase 0 推算参数（avg_out=452 tokens）──────────────────
+# TIME_LIMIT = max(300, int(452 * 2.5)) = 1130s
+# COOLDOWN   = max(60,  int(452 / 2))   = 226s
+TIME_LIMIT_SECS=1130
+COOLDOWN_SECS=226
+AVG_OUTPUT_LEN=452     # Phase 0 实测（old_response tokenize 统计）
+
+# ── 初始并发（4TP 约为 8TP 的一半）─────────────────────────
+INIT_CON="${INIT_CON:-25}"
+
+TIMESTAMP="$(date +%Y%m%d_%H%M)"
+OUTPUT_BASE="${PROJECT_DIR}/logs/xinghan-chart-32b-v1-1-agent/chart-32b-agent-4tp-phase1_${TIMESTAMP}"
 CHECKPOINT="${OUTPUT_BASE}/phase1_checkpoint.md"
 mkdir -p "${OUTPUT_BASE}"
 
 echo "========================================================"
-echo "Phase 1 自动饱和探测 — ziwei-32b 8TP"
-echo "  初始并发: ${INIT_CON}  时长: ${TIME_LIMIT_SECS}s/档"
-echo "  服务: ${SERVER_URL}"
+echo "Phase 1 自动饱和探测 — chart-32b-agent 4TP"
+echo "  初始并发: ${INIT_CON}  时长: ${TIME_LIMIT_SECS}s/档  冷却: ${COOLDOWN_SECS}s"
+echo "  数据集: $(basename ${DATASET_PATH})"
 echo "  输出目录: ${OUTPUT_BASE}"
 echo "========================================================"
 
 CURRENT_CON="${INIT_CON}"
-# con=25 已完成，作为首个 PREV_DIR
-PREV_DIR="${OUTPUT_BASE}/con25"
+PREV_DIR=""
 MAX_ITERS=12
 
 for iter in $(seq 1 ${MAX_ITERS}); do
@@ -52,7 +59,6 @@ for iter in $(seq 1 ${MAX_ITERS}); do
     echo "  第 ${iter} 档  并发=${CURRENT_CON}"
     echo "────────────────────────────────────────────────────────"
 
-    # 已跑过则跳过，直接分析
     if [[ ! -d "${LEVEL_DIR}" ]] || ! ls "${LEVEL_DIR}"/*.csv 2>/dev/null | grep -qv "argv"; then
         CONCURRENCY="${CURRENT_CON}" \
         SERVER_URL="${SERVER_URL}" \
@@ -83,24 +89,23 @@ for iter in $(seq 1 ${MAX_ITERS}); do
 
     if [[ "${NEXT_CON}" == "SATURATED" ]]; then
         echo ""
-        echo "🎯 Phase 1 完成！饱和点已锚定。"
+        echo "🎯 Phase 1 完成！已探测到饱和点。"
         MAX_RPS=$(echo "${ANALYSIS_OUT}" | grep -oP 'max_rps_estimate\s*=\s*\K[\d.]+' | tail -1)
-        START_RPS=$(${PYTHON} -c "print(f'{float(\"${MAX_RPS}\") * 1.2:.4f}')")
-
         echo ""
         echo "========================================================"
-        echo "Phase 1 结果汇总 — ziwei-32b 8TP"
-        echo "  max_rps_estimate : ${MAX_RPS} req/s"
-        echo "  Phase 2 起始 QPS : ${START_RPS} req/s  (× 1.2)"
-        echo "  production_rps   : 1.6667 req/s  (100 RPM / 60)"
+        echo "Phase 1 结果汇总 — chart-32b-agent 4TP"
+        echo "  最大吞吐并发: con=${CURRENT_CON}"
+        echo "  max_rps_estimate: ${MAX_RPS:-unknown} req/s"
+        if [[ -n "${MAX_RPS}" ]]; then
+            START_RPS=$(${PYTHON} -c "print(f'{float(\"${MAX_RPS}\") * 1.2:.4f}')")
+            echo "  Phase 2 起始 QPS = max_rps × 1.2 = ${START_RPS} req/s"
+            echo ""
+            echo "  下一步（Phase 2）启动命令："
+            echo "  PEAK_RPS=${MAX_RPS} START_RPS=${START_RPS} \\"
+            echo "    bash ${PROJECT_DIR}/scripts/benchmark/run_phase2_auto_chart_agent_4tp.sh"
+        fi
         echo "  检查点: ${CHECKPOINT}"
         echo "========================================================"
-
-        echo ""
-        echo "▶ 自动启动 Phase 2..."
-        PEAK_RPS="${MAX_RPS}" \
-        START_RPS="${START_RPS}" \
-        bash "${PHASE2_SCRIPT}"
         break
     fi
 
@@ -111,7 +116,10 @@ for iter in $(seq 1 ${MAX_ITERS}); do
 
     PREV_DIR="${LEVEL_DIR}"
     CURRENT_CON="${NEXT_CON}"
+
+    echo "  💤 冷却 ${COOLDOWN_SECS}s ..."
+    sleep "${COOLDOWN_SECS}"
 done
 
 echo ""
-echo "全流程完成。Phase 1 检查点: ${CHECKPOINT}"
+echo "Phase 1 全部档位完成。检查点: ${CHECKPOINT}"

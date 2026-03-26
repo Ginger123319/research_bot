@@ -311,6 +311,18 @@ details[open] .saturation-block summary::before { content: "▼ "; font-size: 10
 .online-rpm-block .rpm-title { font-weight: 600; margin-bottom: 4px; color: #24292f; font-size: 12px; }
 .online-rpm-current { color: #1a7f37; font-size: 15px; font-weight: 600; }
 .online-rpm-peak { color: #0550ae; font-size: 13px; font-weight: 600; }
+.rpm-sparkline-wrap {
+  margin-top: 6px;
+  background: #f6f8fa;
+  border: 1px solid #d0d7de;
+  border-radius: 4px;
+  padding: 6px 8px 2px;
+}
+.rpm-sparkline-wrap .spark-label {
+  font-size: 10px;
+  color: #57606a;
+  margin-bottom: 2px;
+}
 """
 
 _HTML_TEMPLATE = """\
@@ -468,47 +480,73 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
     def _serve_api_online_rpm(self):
         """GET /api/online-rpm?deployment=<nexus_name>&days=N
 
-        Returns daily max RPM and current RPM for the given deployment name
-        (matches nexus_aiinfra_cece_com_name label in VictoriaMetrics).
+        deployment can be a comma-separated list of names for mixed/multi-instance
+        deployments (e.g. guoxue with H20+L20 instances). RPMs are summed per day.
+        Matches nexus_aiinfra_cece_com_name label in VictoriaMetrics.
         Tries both sglang_num_requests_total and sglang:num_requests_total.
         """
         parsed = urllib.parse.urlparse(self.path)
         params = urllib.parse.parse_qs(parsed.query)
-        deployment = params.get("deployment", [None])[0]
-        days = min(int(params.get("days", ["7"])[0]), 30)
+        deployment_param = params.get("deployment", [None])[0]
+        days = min(int(params.get("days", ["14"])[0]), 30)
 
-        if not deployment:
+        if not deployment_param:
             self._send_json({"error": "deployment parameter required"}, status=400)
             return
 
-        label = f'nexus_aiinfra_cece_com_name="{deployment}"'
+        deployments = [d.strip() for d in deployment_param.split(",") if d.strip()]
         now_ts = int(time.time())
         start_ts = now_ts - days * 86400
+        tz_cst = datetime.timezone(datetime.timedelta(hours=8))
 
-        # Detect which metric format is present, query current RPM
-        current_rpm = None
-        metric_found = None
-        for metric in _SGLANG_METRICS:
-            res = _vm_instant(f'sum(rate({metric}{{{label}}}[1m])) * 60')
-            if res:
-                current_rpm = float(res[0]["value"][1])
-                metric_found = metric
-                break
+        total_current_rpm = 0.0
+        has_current = False
+        daily_sums: dict = {}  # date_str → aggregated max_rpm across all deployments
 
-        # If service not currently live, probe historical data to find metric format
-        if metric_found is None:
+        for dep in deployments:
+            label = f'nexus_aiinfra_cece_com_name="{dep}"'
+
+            # Detect metric format and query current RPM
+            current_rpm_dep = None
+            metric_found = None
             for metric in _SGLANG_METRICS:
-                probe = _vm_range(
-                    f'max_over_time(sum(rate({metric}{{{label}}}[1m]))[24h:1m]) * 60',
-                    start_ts, now_ts, "86400",
-                )
-                if probe:
+                res = _vm_instant(f'sum(rate({metric}{{{label}}}[1m])) * 60')
+                if res:
+                    current_rpm_dep = float(res[0]["value"][1])
                     metric_found = metric
                     break
 
-        if metric_found is None:
+            # If not live, probe history to find the metric format
+            if metric_found is None:
+                for metric in _SGLANG_METRICS:
+                    probe = _vm_range(
+                        f'max_over_time(sum(rate({metric}{{{label}}}[1m]))[24h:1m]) * 60',
+                        start_ts, now_ts, "86400",
+                    )
+                    if probe:
+                        metric_found = metric
+                        break
+
+            if metric_found is None:
+                continue  # This deployment has no data
+
+            if current_rpm_dep is not None:
+                total_current_rpm += current_rpm_dep
+                has_current = True
+
+            # Query daily max RPM for the requested window
+            range_promql = (
+                f'max_over_time(sum(rate({metric_found}{{{label}}}[1m]))[24h:1m]) * 60'
+            )
+            range_res = _vm_range(range_promql, start_ts, now_ts, "86400")
+            if range_res:
+                for ts, val in range_res[0].get("values", []):
+                    dt = datetime.datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d")
+                    daily_sums[dt] = daily_sums.get(dt, 0.0) + round(float(val), 1)
+
+        if not daily_sums and not has_current:
             self._send_json({
-                "deployment": deployment,
+                "deployment": deployment_param,
                 "error": "no data found — deployment may not exist or has no SGLang metrics",
                 "current_rpm": None,
                 "daily_max_7d": None,
@@ -516,27 +554,16 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
             })
             return
 
-        # Query daily max RPM for the requested window
-        range_promql = (
-            f'max_over_time(sum(rate({metric_found}{{{label}}}[1m]))[24h:1m]) * 60'
-        )
-        range_res = _vm_range(range_promql, start_ts, now_ts, "86400")
-
-        tz_cst = datetime.timezone(datetime.timedelta(hours=8))
-        daily = []
-        if range_res:
-            for ts, val in range_res[0].get("values", []):
-                max_rpm = round(float(val), 1)
-                dt = datetime.datetime.fromtimestamp(ts, tz=tz_cst).strftime("%Y-%m-%d")
-                daily.append({"date": dt, "max_rpm": max_rpm})
-
-        # Filter out zero-traffic days (service was down)
+        daily = [
+            {"date": dt, "max_rpm": round(v, 1)}
+            for dt, v in sorted(daily_sums.items())
+        ]
         daily_nonzero = [d for d in daily if d["max_rpm"] > 0]
         daily_max_7d = max((d["max_rpm"] for d in daily_nonzero), default=None)
 
         self._send_json({
-            "deployment": deployment,
-            "current_rpm": round(current_rpm, 1) if current_rpm is not None else None,
+            "deployment": deployment_param,
+            "current_rpm": round(total_current_rpm, 1) if has_current else None,
             "daily_max_7d": daily_max_7d,
             "daily": daily,
         })
@@ -587,6 +614,8 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         online_dep = _html_escape(model.get("online_deployment_name") or "")
         sla_rpm = perf.get("sla_max_qps_rpm") or 0
         dep_instances = (model.get("deployment") or {}).get("current_instances") or 1
+        # online_capacity_rpm overrides sla_rpm*instances for multi-deployment models
+        online_capacity_rpm = model.get("online_capacity_rpm") or 0
         completed_date = model.get("eval_completed_date") or ""
         file_warning = model.get("_file_warning", "")
 
@@ -663,10 +692,17 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
                 '<span style="color:#57606a;font-size:12px">⏳ 加载在线承载量...</span>'
                 '</div>'
             )
-        card_data_attrs = (
-            f' data-dep="{online_dep}" data-sla-rpm="{sla_rpm}" data-instances="{dep_instances}"'
-            if online_dep else ""
-        )
+        if online_dep:
+            if online_capacity_rpm:
+                card_data_attrs = (
+                    f' data-dep="{online_dep}" data-sla-rpm="{online_capacity_rpm}" data-instances="1"'
+                )
+            else:
+                card_data_attrs = (
+                    f' data-dep="{online_dep}" data-sla-rpm="{sla_rpm}" data-instances="{dep_instances}"'
+                )
+        else:
+            card_data_attrs = ""
 
         return f"""
 <div class="model-card"{card_data_attrs}>
@@ -780,6 +816,54 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 </div>
 <script>
 (function () {{
+  // Build an SVG sparkline for daily max RPM data
+  function makeSparkline(daily, capacityRpm) {{
+    var nonzero = daily.filter(function(d) {{ return d.max_rpm > 0; }});
+    if (nonzero.length < 2) return '';
+    var W = 230, H = 52, PX = 6, PY = 6;
+    var vals = nonzero.map(function(d) {{ return d.max_rpm; }});
+    var maxV = Math.max.apply(null, vals);
+    if (capacityRpm > 0) maxV = Math.max(maxV, capacityRpm);
+    maxV = maxV * 1.15;
+    var n = nonzero.length;
+    var xScale = n > 1 ? (W - PX * 2) / (n - 1) : 0;
+    function xOf(i) {{ return PX + i * xScale; }}
+    function yOf(v) {{ return H - PY - (v / maxV) * (H - PY * 2 - 10); }}
+
+    // Line + area path
+    var pts = vals.map(function(v, i) {{ return xOf(i).toFixed(1) + ',' + yOf(v).toFixed(1); }});
+    var linePath = 'M' + pts.join(' L');
+    var areaPath = 'M' + xOf(0).toFixed(1) + ',' + yOf(vals[0]).toFixed(1);
+    pts.slice(1).forEach(function(p) {{ areaPath += ' L' + p; }});
+    areaPath += ' L' + xOf(n-1).toFixed(1) + ',' + (H - PY).toFixed(1) + ' L' + xOf(0).toFixed(1) + ',' + (H - PY).toFixed(1) + ' Z';
+
+    // Capacity threshold line
+    var capLine = '';
+    if (capacityRpm > 0 && capacityRpm <= maxV) {{
+      var cy = yOf(capacityRpm).toFixed(1);
+      capLine = '<line x1="' + PX + '" y1="' + cy + '" x2="' + (W - PX) + '" y2="' + cy
+        + '" stroke="#cf222e" stroke-width="1" stroke-dasharray="3,2" opacity="0.75"/>'
+        + '<text x="' + (W - PX + 1) + '" y="' + (parseFloat(cy) + 3) + '" font-size="8" fill="#cf222e">容量</text>';
+    }}
+
+    // Dots on each data point
+    var dots = vals.map(function(v, i) {{
+      return '<circle cx="' + xOf(i).toFixed(1) + '" cy="' + yOf(v).toFixed(1) + '" r="2.5" fill="#0550ae"/>';
+    }}).join('');
+
+    // X-axis date labels (first and last)
+    var firstDate = nonzero[0].date.slice(5);
+    var lastDate  = nonzero[nonzero.length - 1].date.slice(5);
+    var xLabels = '<text x="' + PX + '" y="' + (H - 1) + '" font-size="8" fill="#57606a">' + firstDate + '</text>'
+      + '<text x="' + (W - PX) + '" y="' + (H - 1) + '" font-size="8" fill="#57606a" text-anchor="end">' + lastDate + '</text>';
+
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '" style="display:block">'
+      + '<path d="' + areaPath + '" fill="#0550ae" opacity="0.07"/>'
+      + '<path d="' + linePath + '" fill="none" stroke="#0550ae" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+      + capLine + dots + xLabels
+      + '</svg>';
+  }}
+
   document.querySelectorAll('.model-card[data-dep]').forEach(async function (card) {{
     var dep = card.getAttribute('data-dep');
     var slaRpm = parseFloat(card.getAttribute('data-sla-rpm') || '0');
@@ -788,7 +872,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
     var block = card.querySelector('.online-rpm-block');
     if (!block) return;
     try {{
-      var r = await fetch('/api/online-rpm?deployment=' + encodeURIComponent(dep) + '&days=7');
+      var r = await fetch('/api/online-rpm?deployment=' + encodeURIComponent(dep) + '&days=14');
       var d = await r.json();
       if (d.error || (d.current_rpm === null && d.daily_max_7d === null)) {{
         block.innerHTML = '<span style="color:#57606a;font-size:12px">暂无在线数据</span>';
@@ -800,7 +884,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
       html += '<div>';
       html += '<span class="online-rpm-current">' + curStr + '</span> <span style="font-size:11px;color:#57606a">当前</span>';
       html += ' &nbsp;|&nbsp; ';
-      html += '<span class="online-rpm-peak">' + peakStr + '</span> <span style="font-size:11px;color:#57606a">7日峰值</span>';
+      html += '<span class="online-rpm-peak">' + peakStr + '</span> <span style="font-size:11px;color:#57606a">近期峰值</span>';
       html += '</div>';
       if (totalSlaRpm > 0 && d.daily_max_7d !== null) {{
         var usage = d.daily_max_7d / totalSlaRpm * 100;
@@ -808,13 +892,21 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         html += '<div style="font-size:11px;margin-top:2px;color:' + col + '">';
         var slaDesc = instances > 1
           ? slaRpm + ' RPM × ' + instances + ' 实例 = ' + totalSlaRpm + ' RPM'
-          : slaRpm + ' RPM';
-        html += 'vs 评测 SLA（' + slaDesc + '）：' + usage.toFixed(0) + '%';
+          : totalSlaRpm.toFixed(0) + ' RPM';
+        html += 'vs 评测容量（' + slaDesc + '）：' + usage.toFixed(0) + '%';
         html += '</div>';
       }}
+      // Sparkline chart (daily max RPM trend)
       var nonzero = (d.daily || []).filter(function(x){{ return x.max_rpm > 0; }});
+      if (nonzero.length >= 2) {{
+        html += '<div class="rpm-sparkline-wrap">';
+        html += '<div class="spark-label">单日最大 RPM 趋势（近 14 天）</div>';
+        html += makeSparkline(nonzero, totalSlaRpm);
+        html += '</div>';
+      }}
+      // Collapsible detail table
       if (nonzero.length > 0) {{
-        html += '<details style="margin-top:4px"><summary style="font-size:11px;color:#57606a;cursor:pointer">近期每日峰值详情</summary>';
+        html += '<details style="margin-top:4px"><summary style="font-size:11px;color:#57606a;cursor:pointer">每日峰值明细</summary>';
         html += '<table style="margin:4px 0;font-size:11px;width:auto"><tr><th>日期</th><th>峰值 RPM</th></tr>';
         nonzero.slice().reverse().forEach(function (row) {{
           html += '<tr><td>' + row.date + '</td><td>' + row.max_rpm + '</td></tr>';

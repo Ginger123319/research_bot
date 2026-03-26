@@ -25,7 +25,7 @@ TOKENIZER="/mnt/ai-llm/chartv5"
 DATASET_PATH="${PROJECT_DIR}/datas/output_chart/xinghan-chart-32b-v1-1-agent_full.csv"
 MAX_COMPLETION_TOKENS=4096
 TIME_LIMIT_SECS=300        # 每档 5min，足够采到稳态
-NUM_REQUESTS_MUL=200       # NUM_REQUESTS = CON × 200（确保足够请求）
+AVG_OUTPUT_LEN=200        # Phase 1 历史实测均值（output_chart 数据集）
 
 # ── 初始并发 ────────────────────────────────────────────────
 INIT_CON="${INIT_CON:-25}"
@@ -63,7 +63,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
         TOKENIZER="${TOKENIZER}" \
         MAX_COMPLETION_TOKENS="${MAX_COMPLETION_TOKENS}" \
         TIME_LIMIT_SECS="${TIME_LIMIT_SECS}" \
-        NUM_REQUESTS_MUL="${NUM_REQUESTS_MUL}" \
+        AVG_OUTPUT_LEN="${AVG_OUTPUT_LEN}" \
         bash "${SATURATE}"
     else
         echo "  ℹ️  con=${CURRENT_CON} 已有结果，跳过执行直接分析"
@@ -75,6 +75,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
             --dir "${LEVEL_DIR}" \
             ${PREV_DIR:+--prev-dir "${PREV_DIR}"} \
             --checkpoint "${CHECKPOINT}" \
+            --avg-output-len-phase0 "${AVG_OUTPUT_LEN}" \
         2>&1
     )
     echo "${ANALYSIS_OUT}"

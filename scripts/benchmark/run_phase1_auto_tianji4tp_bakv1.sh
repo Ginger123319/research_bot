@@ -23,7 +23,7 @@ TOKENIZER="/mnt/ai-llm/tianji_query_safety/v2p3_ep1"
 DATASET_PATH="${PROJECT_DIR}/datas/output_tianji_querysafety/tianji-querysafety-4b-v2-3_peak30min.csv"
 MAX_COMPLETION_TOKENS=256
 TIME_LIMIT_SECS=300        # 每档 5min
-TARGET_MUL=1500            # 目标 NUM_REQUESTS = CON × 1500（动态缩减以不超数据集上限）
+AVG_OUTPUT_LEN=14          # Phase 1 历史实测（tianji safety filter，avg_output=14 tokens）
 
 # ── 初始并发（来自 Grafana max active_requests） ─────────────
 INIT_CON="${INIT_CON:-9}"
@@ -50,13 +50,9 @@ MAX_ITERS=15
 for iter in $(seq 1 ${MAX_ITERS}); do
     LEVEL_DIR="${OUTPUT_BASE}/con${CURRENT_CON}"
 
-    # 动态计算 NUM_REQUESTS_MUL：目标 1500，但不超数据集上限
-    MAX_MUL=$(${PYTHON} -c "print(int(${DATASET_DATA_ROWS} / ${CURRENT_CON}))")
-    NUM_REQUESTS_MUL=$(( TARGET_MUL < MAX_MUL ? TARGET_MUL : MAX_MUL ))
-
     echo ""
     echo "────────────────────────────────────────────────────────"
-    echo "  第 ${iter} 档  并发=${CURRENT_CON}  num_requests=${CURRENT_CON}×${NUM_REQUESTS_MUL}=$(( CURRENT_CON * NUM_REQUESTS_MUL ))"
+    echo "  第 ${iter} 档  并发=${CURRENT_CON}"
     echo "────────────────────────────────────────────────────────"
 
     if [[ ! -d "${LEVEL_DIR}" ]] || ! ls "${LEVEL_DIR}"/*.csv 2>/dev/null | grep -qv "argv"; then
@@ -68,7 +64,8 @@ for iter in $(seq 1 ${MAX_ITERS}); do
         TOKENIZER="${TOKENIZER}" \
         MAX_COMPLETION_TOKENS="${MAX_COMPLETION_TOKENS}" \
         TIME_LIMIT_SECS="${TIME_LIMIT_SECS}" \
-        NUM_REQUESTS_MUL="${NUM_REQUESTS_MUL}" \
+        AVG_OUTPUT_LEN="${AVG_OUTPUT_LEN}" \
+        MAX_REQUESTS="${DATASET_DATA_ROWS}" \
         bash "${SATURATE}"
     else
         echo "  ℹ️  con=${CURRENT_CON} 已有结果，跳过执行直接分析"
@@ -80,6 +77,7 @@ for iter in $(seq 1 ${MAX_ITERS}); do
             --dir "${LEVEL_DIR}" \
             ${PREV_DIR:+--prev-dir "${PREV_DIR}"} \
             --checkpoint "${CHECKPOINT}" \
+            --avg-output-len-phase0 "${AVG_OUTPUT_LEN}" \
         2>&1
     )
     echo "${ANALYSIS_OUT}"

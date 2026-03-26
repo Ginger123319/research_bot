@@ -135,7 +135,8 @@ def calc_max_active_requests(df_ok: pd.DataFrame) -> int:
 # ── Phase 1 分析 ─────────────────────────────────────────────────────────────
 
 def analyze_phase1(level_dir: Path, prev_throughput: float | None,
-                   checkpoint_path: Path | None):
+                   checkpoint_path: Path | None,
+                   avg_output_len_phase0: float | None = None):
     print("\n" + "=" * 60)
     print(f"Phase 1 饱和探测分析  ← {level_dir.name}")
     print("=" * 60)
@@ -177,13 +178,42 @@ def analyze_phase1(level_dir: Path, prev_throughput: float | None,
     print(f"  成功请求数        : {success_cnt}  ({success_rate*100:.1f}%)")
 
     # ── max_rps_estimate ────────────────────────────────────────────────────
-    if avg_output_len and avg_output_len > 0:
-        max_rps = decode_tp / avg_output_len
-        print(f"\n── 换算极限 RPS ──")
-        print(f"  max_rps_estimate = {decode_tp:.3f} / {avg_output_len:.1f} = {max_rps:.4f} req/s")
+    # 分母选择：Phase 0 权威值（若提供）> Phase 1 实测值
+    # Phase 1 实测值因高并发下长请求超时丢弃，均值系统性偏低，不应作为主分母
+    avg_output_len_measured = avg_output_len  # Phase 1 实测（仅供参考）
+
+    if avg_output_len_phase0 and avg_output_len_phase0 > 0:
+        denom        = avg_output_len_phase0
+        denom_source = f"Phase 0 权威值 {avg_output_len_phase0:.1f}"
+        if avg_output_len_measured and avg_output_len_measured > 0:
+            dev_pct = (avg_output_len_measured - avg_output_len_phase0) / avg_output_len_phase0 * 100
+            dev_warn = f"  ⚠️  偏差 {dev_pct:+.1f}%，超过 20% 时需调查根因" if abs(dev_pct) > 20 else ""
+        else:
+            dev_pct  = None
+            dev_warn = ""
+    elif avg_output_len_measured and avg_output_len_measured > 0:
+        denom        = avg_output_len_measured
+        denom_source = f"Phase 1 实测值 {avg_output_len_measured:.1f}（⚠️ 未提供 Phase 0 权威值，存在截断偏差）"
+        dev_pct  = None
+        dev_warn = ""
+    else:
+        denom = None
+
+    print(f"\n── 换算极限 RPS ──")
+    if avg_output_len_phase0:
+        print(f"  avg_output_len (Phase 0 权威) = {avg_output_len_phase0:.1f} tokens  ← 分母来源")
+    if avg_output_len_measured:
+        print(f"  avg_output_len (Phase 1 实测) = {avg_output_len_measured:.1f} tokens  ← 仅供参考")
+        if dev_pct is not None:
+            print(f"  Phase 0 vs Phase 1 偏差      = {dev_pct:+.1f}%{dev_warn}")
+
+    if denom and denom > 0:
+        max_rps = decode_tp / denom
+        print(f"  max_rps_estimate = {decode_tp:.3f} / {denom:.1f} ({denom_source}) = {max_rps:.4f} req/s")
         print(f"  Phase 2 建议起始 QPS = {max_rps * 1.2:.4f} req/s  (× 1.2)")
     else:
         max_rps = None
+        print(f"  ⚠️  无法计算 max_rps（avg_output_len 为空，请提供 --tokenizer 或 --avg-output-len-phase0）")
 
     # ── 峰值并发 ────────────────────────────────────────────────────────────
     peak_concur = calc_max_active_requests(df_ok)
@@ -208,12 +238,25 @@ def analyze_phase1(level_dir: Path, prev_throughput: float | None,
             advice = "停止 Phase 1，进入 Phase 2"
         elif growth_pct <= 10.0:
             verdict = "🔶 接近饱和"
-            next_con = concurrency + 10
-            advice = f"线性 +10 → 下一档并发: {next_con}"
+            # 比例步进：max(current×5%, 10)，避免大并发时 +10 效率极低
+            # 例：con=400 → step=max(20,10)=20；con=40 → step=max(2,10)=10（保持精度）
+            step = max(int(concurrency * 0.05), 10)
+            next_con = concurrency + step
+            advice = f"比例 +{step}（= con×5% ≥ 10）→ 下一档并发: {next_con}"
         else:
             verdict = "🔴 未饱和"
-            next_con = concurrency * 2
-            advice = f"翻倍 ×2 → 下一档并发: {next_con}"
+            # 分段倍增：大并发下步子不能太猛，避免一步翻倍造成过冲或测试浪费
+            #   con < 50  : ×2.0（探测期，量级未知，快速定位）
+            #   50~200    : ×1.5（中速逼近）
+            #   > 200     : ×1.2（高并发谨慎推进，防止 200→400 大跳）
+            if concurrency < 50:
+                mul = 2.0
+            elif concurrency <= 200:
+                mul = 1.5
+            else:
+                mul = 1.2
+            next_con = int(concurrency * mul)
+            advice = f"分段 ×{mul} → 下一档并发: {next_con}"
 
         print(f"  结论: {verdict}")
         print(f"  建议: {advice}")
@@ -240,7 +283,8 @@ def analyze_phase1(level_dir: Path, prev_throughput: float | None,
     if checkpoint_path:
         _write_phase1_checkpoint(
             checkpoint_path, level_dir.name, concurrency,
-            decode_tp, prev_throughput, avg_output_len,
+            decode_tp, prev_throughput,
+            avg_output_len_phase0, avg_output_len_measured,
             max_rps, peak_concur
         )
 
@@ -249,12 +293,28 @@ def analyze_phase1(level_dir: Path, prev_throughput: float | None,
 
 def _write_phase1_checkpoint(path: Path, level_name: str, concurrency: int,
                               decode_tp: float, prev_tp: float | None,
-                              avg_output_len: float | None,
+                              avg_output_len_phase0: float | None,
+                              avg_output_len_measured: float | None,
                               max_rps: float | None, peak_concur: int):
     growth_str = ""
     if prev_tp is not None and prev_tp > 0:
         g = (decode_tp - prev_tp) / prev_tp * 100
         growth_str = f"{g:+.2f}%"
+
+    # Phase 0 vs Phase 1 偏差
+    if avg_output_len_phase0 and avg_output_len_measured:
+        dev_pct = (avg_output_len_measured - avg_output_len_phase0) / avg_output_len_phase0 * 100
+        dev_str = f"{dev_pct:+.1f}%  {'⚠️ 偏差 >20%，需调查根因' if abs(dev_pct) > 20 else '✅ 偏差合理'}"
+    else:
+        dev_str = "—"
+
+    # max_rps 实际使用的分母来源
+    if avg_output_len_phase0:
+        denom_used = f"{avg_output_len_phase0:.1f} tokens（Phase 0 权威值）"
+    elif avg_output_len_measured:
+        denom_used = f"{avg_output_len_measured:.1f} tokens（Phase 1 实测，⚠️ 未提供 Phase 0 值）"
+    else:
+        denom_used = "—"
 
     lines = [
         f"\n## Phase 1 检查点 — {level_name}  ({datetime.now().strftime('%Y-%m-%d %H:%M')})\n",
@@ -263,7 +323,10 @@ def _write_phase1_checkpoint(path: Path, level_name: str, concurrency: int,
         f"| 并发数 | {concurrency} |",
         f"| decode_throughput | {decode_tp:.3f} tokens/s |",
         f"| 上档吞吐增幅 | {growth_str or '—'} |",
-        f"| avg_output_len | {f'{avg_output_len:.1f} tokens' if avg_output_len else '—'} |",
+        f"| avg_output_len (Phase 0 权威) | {f'{avg_output_len_phase0:.1f} tokens' if avg_output_len_phase0 else '—（未提供）'} |",
+        f"| avg_output_len (Phase 1 实测) | {f'{avg_output_len_measured:.1f} tokens' if avg_output_len_measured else '—'} |",
+        f"| Phase 0 vs Phase 1 偏差 | {dev_str} |",
+        f"| avg_output_len (用于计算) | {denom_used} |",
         f"| max_rps_estimate | {f'{max_rps:.4f} req/s' if max_rps else '—'} |",
         f"| max_active_requests | {peak_concur} |",
         f"\n如有调整意见请在此回复 ↓\n",
@@ -499,11 +562,11 @@ def _write_phase2_checkpoint(path: Path, level_name: str, current_rps: float,
 
 def analyze_dataset(dataset_path: Path, tokenizer_path: str | None):
     """
-    从数据集 CSV 的 old_response 列预估输出长度分布。
-    不需要跑任何 benchmark，用于 Phase 1 前预估 max_rps_estimate。
+    Phase 0：从数据集 old_response 列预估输出长度分布，执行数据质量检查，
+    输出三阶段参数推算（DURATION_SECS / COOLDOWN_SECS）。
     """
     print("\n" + "=" * 60)
-    print(f"数据集输出长度预估  ← {dataset_path.name}")
+    print(f"Phase 0 数据集预分析  ← {dataset_path.name}")
     print("=" * 60)
 
     df = pd.read_csv(dataset_path, dtype={"old_response": str})
@@ -517,15 +580,38 @@ def analyze_dataset(dataset_path: Path, tokenizer_path: str | None):
         print("  ⚠️  old_response 列为空，无法估算输出长度")
         return
 
-    # ── 字符数分布（无需 tokenizer）──────────────────────────────────────────
-    char_lens = df_has_resp["old_response"].str.len()
+    # ── 数据质量检查（必须在 tokenize 前完成）────────────────────────────────
+    print(f"\n── old_response 数据质量检查 ──")
+    responses = df_has_resp["old_response"]
+
+    # <think> 比例：推理模型应 ≥ 70%
+    think_cnt = responses.str.contains("<think>", na=False).sum()
+    think_pct = think_cnt / valid * 100
+    think_ok  = think_pct >= 70
+    think_flag = "✅" if think_ok else "⚠️ "
+    print(f"  {think_flag} 含 <think> 比例: {think_pct:.1f}%  "
+          f"({'推理模型 ≥70% 合格' if think_ok else '若为推理模型则缺少推理链，Phase 0 值不可信'})")
+
+    # <con> 残留比例：新版推理模型不再输出 <con>，应 ≈ 0%
+    con_cnt = responses.str.contains("<con>", na=False).sum()
+    con_pct  = con_cnt / valid * 100
+    con_ok   = con_pct < 5
+    con_flag = "✅" if con_ok else "⚠️ "
+    print(f"  {con_flag} 含 <con> 残留比例: {con_pct:.1f}%  "
+          f"({'正常' if con_ok else '含旧格式 <con>，模型版本或格式可能已变，请核查'})")
+
+    quality_note = "可信" if (think_ok and con_ok) else "有缺陷（见上方质量检查结果）"
+
+    # ── 字符数分布（无需 tokenizer，快速参考）────────────────────────────────
+    char_lens = responses.str.len()
     print(f"\n── 输出长度分布（字符数，近似参考）──")
     print(f"  Avg : {char_lens.mean():>8.1f} chars")
     print(f"  P50 : {char_lens.quantile(0.50):>8.1f} chars")
     print(f"  P90 : {char_lens.quantile(0.90):>8.1f} chars")
     print(f"  P99 : {char_lens.quantile(0.99):>8.1f} chars")
 
-    # ── Token 数分布（需要 tokenizer）────────────────────────────────────────
+    # ── Token 数分布（全量 tokenize，权威值）────────────────────────────────
+    avg_tokens: float | None = None
     if tokenizer_path:
         print(f"\n  正在加载 tokenizer: {tokenizer_path} ...")
         try:
@@ -533,47 +619,63 @@ def analyze_dataset(dataset_path: Path, tokenizer_path: str | None):
             import os
             os.environ["TOKENIZERS_PARALLELISM"] = "false"
             tok = AutoTokenizer.from_pretrained(tokenizer_path)
-            sample = df_has_resp["old_response"].head(500)  # 最多采样 500 条
-            token_lens = sample.apply(lambda x: len(tok.encode(x, add_special_tokens=False)))
+            print(f"  对全量 {valid} 条 old_response 做 tokenize（可能需要数分钟）...")
+            token_lens = responses.apply(
+                lambda x: len(tok.encode(x, add_special_tokens=False))
+            )
             avg_tokens = token_lens.mean()
-            print(f"\n── 输出长度分布（tokens，采样 {len(sample)} 条）──")
-            print(f"  Avg : {avg_tokens:>8.1f} tokens  ← 推荐用于换算 max_rps_estimate")
+            print(f"\n── 输出长度分布（tokens，全量 {valid} 条）──")
+            print(f"  Avg : {avg_tokens:>8.1f} tokens  ← Phase 0 权威值，用于 max_rps_estimate 分母")
             print(f"  P50 : {token_lens.quantile(0.50):>8.1f} tokens")
             print(f"  P90 : {token_lens.quantile(0.90):>8.1f} tokens")
             print(f"  P99 : {token_lens.quantile(0.99):>8.1f} tokens")
-            print(f"\n  💡 示例：若 peak_decode_throughput = X tokens/s")
-            print(f"     max_rps_estimate = X / {avg_tokens:.1f} req/s")
         except Exception as e:
             print(f"  ⚠️  tokenizer 加载失败: {e}")
             print(f"  退而使用字符数 ÷ 3.5 粗估（中文模型经验值）")
             avg_tokens = char_lens.mean() / 3.5
-            print(f"  粗估 avg_tokens ≈ {avg_tokens:.1f}")
+            print(f"  粗估 avg_tokens ≈ {avg_tokens:.1f}（不可用于权威计算）")
     else:
         avg_tokens = char_lens.mean() / 3.5
         print(f"\n  （未提供 tokenizer，字符数 ÷ 3.5 粗估 avg_tokens ≈ {avg_tokens:.1f}）")
+        print(f"  ⚠️  粗估值不可信，建议提供 --tokenizer 后重跑 Phase 0")
 
-    # ── Phase 1 起始方向建议（基于输出长度先验）────────────────────────────
-    print(f"\n── Phase 1 起始方向建议 ──")
-    avg_for_advice = avg_tokens if tokenizer_path else (char_lens.mean() / 3.5)
-    if avg_for_advice < 200:
-        start_dir = "从高并发向下"
-        start_con = 200
-        reason = f"短输出（avg≈{avg_for_advice:.0f} tokens），快进快出，最优并发高，从高向低更快找拐点"
-    elif avg_for_advice < 600:
-        start_dir = "从中等并发向上"
+    # ── 三阶段参数自动推算 ──────────────────────────────────────────────────
+    print(f"\n── 三阶段参数推算（基于 avg_output_len = {avg_tokens:.1f} tokens）──")
+    duration_secs = max(300, int(avg_tokens * 2.5))
+    cooldown_secs = max(60,  int(avg_tokens / 2))
+    duration_p23  = max(1200, duration_secs)
+    print(f"  Phase 1 每档时长:  DURATION_SECS = max(300,  int({avg_tokens:.0f}×2.5)) = {duration_secs}s")
+    print(f"  Phase 2/3 每档时长: DURATION_SECS = max(1200, {duration_secs})          = {duration_p23}s")
+    print(f"  档位间冷却:         COOLDOWN_SECS = max(60,   int({avg_tokens:.0f}/2))  = {cooldown_secs}s")
+
+    # ── Phase 1 起始并发建议 ────────────────────────────────────────────────
+    print(f"\n── Phase 1 起始建议 ──")
+    if avg_tokens < 200:
         start_con = 50
-        reason = f"中等输出（avg≈{avg_for_advice:.0f} tokens），从 50 翻倍向上探"
-    elif avg_for_advice < 1500:
-        start_dir = "从低并发向上"
+        reason = f"短输出（avg≈{avg_tokens:.0f} tokens），从 50 起跳分段倍增"
+    elif avg_tokens < 600:
+        start_con = 50
+        reason = f"中等输出（avg≈{avg_tokens:.0f} tokens），从 50 起跳分段倍增"
+    elif avg_tokens < 1500:
         start_con = 20
-        reason = f"较长输出（avg≈{avg_for_advice:.0f} tokens），最优并发中等，从 20 翻倍向上探"
+        reason = f"较长输出（avg≈{avg_tokens:.0f} tokens），最优并发中等，从 20 起跳"
     else:
-        start_dir = "从低并发向上"
         start_con = 10
-        reason = f"超长推理输出（avg≈{avg_for_advice:.0f} tokens），E2E 耗时大，最优并发低，从 10 翻倍向上探"
-    print(f"  策略: {start_dir}  建议起始并发: con={start_con}")
-    print(f"  原因: {reason}")
-    print(f"\n  Phase 2 建议起始 QPS：待 Phase 1 完成后由 peak_throughput / avg_tokens 计算")
+        reason = f"超长推理输出（avg≈{avg_tokens:.0f} tokens），E2E 耗时大，从 10 起跳"
+    print(f"  建议起始并发: con={start_con}  原因: {reason}")
+    print(f"  （若已知 Grafana max active_requests，可直接从该值起跳，跳过低档位爬坡）")
+
+    # ── 汇总输出（供复制到脚本）──────────────────────────────────────────────
+    print(f"\n── Phase 0 产出汇总（复制到对应 auto 脚本）──")
+    print(f"  AVG_OUTPUT_LEN={avg_tokens:.0f}      # Phase 0 权威值，数据质量: {quality_note}")
+    print(f"  TIME_LIMIT_SECS={duration_secs}     # Phase 1")
+    print(f"  TIME_LIMIT_SECS={duration_p23}    # Phase 2/3")
+    print(f"  COOLDOWN_SECS={cooldown_secs}")
+    print(f"  INIT_CON={start_con}")
+    if not (think_ok and con_ok):
+        print(f"\n  ⚠️  数据质量有缺陷，Phase 0 值可能不可信：")
+        print(f"     - 在 Phase 1 完成后，对比 Phase 1 实测 avg_output_len")
+        print(f"     - 偏差 > 20% 时使用 Phase 1 实测值替代")
     print("")
 
 
@@ -722,6 +824,10 @@ def main():
                         help="[Phase 0] 数据集 CSV 路径，从 old_response 预估输出长度分布")
     parser.add_argument("--tokenizer", default=None,
                         help="[Phase 0] tokenizer 路径，用于精确计算 token 数")
+    # Phase 1 专用
+    parser.add_argument("--avg-output-len-phase0", type=float, default=None,
+                        help="[Phase 1] Phase 0 测得的权威 avg_output_len（tokens），"
+                             "作为 max_rps_estimate 的分母；不提供则回落到 Phase 1 实测值")
     # Phase 2 SLA 参数
     parser.add_argument("--ttfs-p90-limit", type=float, default=1.5,
                         help="TTFS P90 上限（秒，默认 1.5）")
@@ -769,7 +875,8 @@ def main():
         prev_throughput = None
         if prev_dir is not None:
             prev_throughput = _load_decode_throughput(prev_dir)
-        analyze_phase1(level_dir, prev_throughput, checkpoint)
+        analyze_phase1(level_dir, prev_throughput, checkpoint,
+                       avg_output_len_phase0=args.avg_output_len_phase0)
     else:
         analyze_phase2(level_dir, prev_dir,
                        args.ttfs_p90_limit, args.e2e_p90_limit,

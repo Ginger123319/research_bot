@@ -440,3 +440,212 @@ format:
 **做了什么**：定位并修复两个 bug——①bracket 更新后未重算几何中点（导致下一档比通过档还低）；②旧代码直接读 `CONVERGED` 标记未校验 bracket 宽度（导致 4TP 在 bracket 宽 50% 时误判收敛）；修复后 8TP 完成收敛（ideal_rps=7.6132 req/s，7 档），4TP 从误判点续跑（`INIT_LO/INIT_HI` 环境变量，bracket 当前 [4.192, 4.410]，还需 2 档）；8TP Phase 3（4 档 × 45min）已启动，4TP Phase 3 自动衔接脚本（每 30s 轮询日志）已就位待触发；在 SKILL.md 补充 `⚠️ 实现陷阱：next_rps 必须在 bracket 更新后重新计算` 详细说明。
 
 **结果**：8TP Phase 2 收敛完成，Phase 3 运行中；4TP Phase 2 续跑中，Phase 3 将自动衔接；两个脚本 bug 均已修复并落入 SKILL 文档，防止复现。
+
+---
+
+# 📅 2026-03-20 工作日报
+
+## 一、ziwei-32b 8TP Peak Finder 结果归档 & 生产风险预警
+
+**背景**：ziwei-32b-v1 8TP Peak Finder 三阶段跑完，需要整理归档，并与实际生产负载（100 RPM）对比，确认当前容量是否充足。
+
+**做了什么**：合并 Phase 2+3 共 10 档数据跑 `qps-sweep-comparison`，生成完整 REPORT.md，追加 model-context 和 INDEX.yaml 中的 peak-finder 字段；同时修复 Phase 1 自动脚本中 `MAX_RPS` 正则误提取 decode_throughput 值（`max_rps_estimate = 184.488 / 228.7 = 0.8065` 首次命中 184.488 而非最终结果）的 bug。
+
+**结果**：ideal_rps = **1.5902 req/s（95.4 RPM）**；⚠️ **关键风险**：生产 100 RPM > SLA 上限 95.4 RPM，rps=1.6748 时 TTFS P90 = 1783ms（超限 19%），INDEX.yaml recommendation 已标注风险，需扩容。
+
+---
+
+## 二、chart-32b 回放测试结果分析 & EVAL_REPORT 交付（全流程闭环）
+
+**背景**：chart-32b 峰值回放测试已在后台运行完成（110 分钟），需要完成 Step 6 结果分析和 Step 7 评估报告生成，完成该模型全流程闭环。
+
+**做了什么**：分析 5,826 条回放结果，生成 HTML + 7 张 PNG 图表 + 详细 REPORT.md；调用 `model-eval-report` Skill 生成 EVAL_REPORT.md，计算资源建议（业务峰值 118 RPM，单实例 ideal 457 RPM，余量 11×）；更新 INDEX.yaml 和 results/README.md。
+
+**结果**：成功率 99.19%，TTFT P90=0.135s（SLA余量91%），✅ 可上线；推荐最低 1 实例 × 8TP（HA 建议 2 实例 × 8TP = 16 卡 L20）；chart-32b **全 7 步完成**。
+
+---
+
+## 三、tianji-querysafety-4b-v2-3 bakv1 QPS Peak Finder Phase 1+2 完成
+
+**背景**：新 bakv1 端点需要独立验证 SLA 合规能力（不能复用旧端点测试结论），并确认当前生产负载（每实例 7.47 RPS）是否在安全边界内。
+
+**做了什么**：完成 Phase 1 饱和探测（con=9→18→36，peak 在 con=18，max_rps=52.6）；Phase 2 运行 10 轮自适应逼近，bracket 收敛至 [7.8554, 8.0609]（宽度 2.6% < 3%）；Phase 3 上线验证网格（4 档 linspace [7.47, 7.86]）已启动；修复主编排脚本 Phase 1→2 过渡时 checkpoint 正则无法从 markdown 表格格式提取 MAX_RPS 的问题。
+
+**结果**：**ideal_rps = 7.8554 RPS**，与旧端点结论（8.0 RPS）高度一致，bakv1 性能相当；生产 7.47 RPS 在 SLA 边界内，余量 +5.1%。
+
+---
+
+## 四、在线承载量监控集成到 Dashboard
+
+**背景**：评测结论与线上实际运行情况需要对比才有意义，但此前 Dashboard 只展示评测数据，没有实时流量数据，无法判断当前容量使用率。
+
+**做了什么**：调研 VictoriaMetrics 指标体系（发现新旧两种 SGLang 指标格式 `sglang_num_requests_total` vs `sglang:num_requests_total`，自动 fallback），封装核心 PromQL（每日最大 RPM）；在 `serve.py` 新增 `/api/online-rpm` 接口和 Dashboard 异步 JS 加载区块，展示当前 RPM、7 日峰值、vs 评测 SLA 使用率（绿/黄/红）；制作同事可独立使用的 `scripts/demo/query_online_rpm.py` CLI 工具（零依赖，含 ASCII 柱状图）；commit `75ad8c0`（33 文件，4205 行新增）。
+
+**结果**：tianji 总容量使用率 **91.8%**（7日峰值 3524 RPM，总容量 3840 RPM），接近红线；lingyu 使用率 42.1%（758/1800 RPM），充裕。线上数据与评测结论形成完整闭环。
+
+---
+
+## 五、guoxue-v2 真实数据重评启动（情况 C 新路径）
+
+**背景**：上次 guoxue 评估使用了兜底数据，system prompt 分布与线上不一致，需换用 AI-data 平台真实导出数据（50,000 条，1.9GB）重评；同时 SLA 要求也有更新（E2E P90 < 180s，原为 150s）。
+
+**做了什么**：新数据格式为 AI-data 平台 downloaded 格式（每行是 `list` 而非 `dict`），DataConverter 无法处理，创建 `process_guoxue_v2.py` 完全绕过 DataConverter/DataSampler，自定义 pandas 解析流程（情况 C 路径）；Phase 1 完成（peak_decode_throughput=360 t/s，max_rps=0.260 req/s）；Phase 2 启动但遭遇测试污染（COOLDOWN_SECS=60 严重不足，avg_output_len~1386 tokens 的请求积压）和 PRODUCTION_RPS 误配，修复参数（COOLDOWN→900s，DURATION→3600s）后重启，当前运行中；在 Skill 中新增情况 C 路径、DURATION/COOLDOWN 自动推算公式、测试污染警告。
+
+**结果**：Phase 1 完成，Phase 2 运行中（每档 1h，档间冷却 15min）；两条 Skill 文档新增了情况 C 路径和长输出推理模型的测试污染防范，方法论得到完善。
+
+---
+
+# 📅 2026-03-23 工作日报
+
+## 一、chart-32b Agent 调用原始数据提取交付
+
+**背景**：chart-32b 压测数据集只包含 6,016 条直接模型调用，41K 条 Agent 框架调用因 prompt 无法还原而未纳入。算法组需要这批原始 Agent 调用记录，用于数据输入改造（`prompt2` 字段逻辑转化）。
+
+**做了什么**：新建 `scripts/data/extract_agent_calls.py`，从 739MB 原始下载数据中过滤 `星盘普通` 模型和对应 bot_id 的 Agent 调用；二次过滤移除 700 条 `prompt2` 为空的记录（日志写入偶发丢失）；确认 307 条异常记录（model/bot_id 均为空）属于日志残缺，与文档记录 41,320 的差值得以解释。
+
+**结果**：交付 `xinghan-chart-32b-v1-1-agent_calls_raw_260312_260316.jsonl`（**40,315 条，716MB**），prompt2 全部有效，可直接用于算法组改造。
+
+---
+
+## 二、guoxue EVAL_REPORT 混合部署纠正 & INDEX.yaml 双配置重构
+
+**背景**：guoxue EVAL_REPORT.md 多处将当前部署误写为"仅 6×H20"，与实际（6×H20 + 4×L20 混合 10 实例）不符；INDEX.yaml 中 `saturation_rps` 字段存放的是 H20 数据（0.7348），但主配置标注为 8×L20，Dashboard 显示混乱。
+
+**做了什么**：修正 EVAL_REPORT 6 处错误（摘要表、部署配置、流量说明、当前方案对比表等），新增三锚点对照表和 Phase 1 饱和探测摘要；重构 INDEX.yaml——以 `_h20` 后缀区分两套配置（L20 为主配置，H20 数据挂 `_h20` 后缀），新增 H20/L20 效率对比字段（QPS 比 2.78×，每卡 RPS 比 5.56×）。
+
+**结果**：Dashboard 显示数据与实际部署一致；L20 vs H20 两套性能数据在同一条目中清晰可查。
+
+---
+
+## 三、guoxue V1 旧实验归档 & EVAL_REPORT 完全重写
+
+**背景**：此前 guoxue 评估基于兜底数据，业务峰值口径只算了 stream 流量（43 RPM），遗漏了 MCP 八字深度的 213 RPM，导致评估结论严重低估需求（推荐 4 实例 × 8L20），与实际所需差距巨大，需用 V2 真实数据重写报告。
+
+**做了什么**：将 4 个 V1 实验目录（使用兜底数据）移入 `results/archive/guoxue-v1-deprecated/` 并写 ARCHIVED.md；完全重写 EVAL_REPORT.md——业务峰值从 43 RPM 修正为 **256 RPM**（stream 43 + MCP 213），推荐方案从"4 实例"扩大为"**≥20 实例 × 8L20（160 卡）**"，明确 L20 为长期目标、H20 为临时过渡；修正 INDEX.yaml 中 `sla_max_qps_rps`（0.5878→0.2114）和 `sla_max_qps_rpm`（35.3→12.7）。
+
+**结果**：guoxue 评估结论完成 V1→V2 切换，资产归档清晰，Dashboard 数据修正，报告结论可信度大幅提升。
+
+---
+
+## 四、guoxue L20 生产锚点补测
+
+**背景**：Phase 3 最低档为 0.05 req/s，与 Grafana 实测生产 RPS（0.195 req/s）相差 4 倍，"生产 RPM 锚点"名不副实，需补跑实际生产负载档位。
+
+**做了什么**：新建 `run_prod_anchor_guoxue8tp.sh`，跑单档 1 小时（0.195 req/s，843 请求，含 1.2× buffer）；分析结果时发现初始成功率显示 83.4%，经 status 分布分析确认 140 条 `status=-5` 为 TIMELIMIT buffer 未发请求，实发 703 条全部成功。
+
+**结果**：**成功率 100%，TTFS P90=730ms（SLA 余量 51%），E2E P90=152.2s（SLA 余量 15.4%）**；Phase 3 报告新增实测生产锚点行，结论更具说服力。
+
+---
+
+## 五、guoxue 4H20+9L20 新部署回放分析 & EVAL_REPORT 增量更新
+
+**背景**：业务侧将部署从 6H20+4L20 调整为 4H20+9L20（H20 释放 2 卡，换 5 张 L20），需验证新方案在实际流量下的表现，并与基线方案横向对比。
+
+**做了什么**：确认回放测试完成（6,358 条，100% 成功率，54 分钟）；运行 `offline_analysis.py` 处理 6.3GB CSV，生成 HTML + 7 张 PNG；撰写 REPORT.md（含与 6H20+4L20 基线的 5 项指标横向对比）；用增量修改模式更新 EVAL_REPORT.md 的 5 处（摘要表、回放结论双方案表格、部署配置节、实验索引）。
+
+**结果**：4H20+9L20 成功率 **99.89%**，TTFT P90=1.029s，E2E P90=115.5s（SLA 余量 36%）；相比基线 E2E P90 升高 14.7%，整体仍在 SLA 范围内，三月峰值 195 RPM 余量 +31%；⚠️ E2E P99=148.8s（达 SLA 的 83%），需持续监控。
+
+> **今日整体进展**：progress.md 归档为 Vol.2（历史 4826 行已压缩入 `progress_archive_vol1.md`），guoxue 是全天主线，完成了数据纠错、资产清理、报告重写、补测验证和新方案回放分析的完整闭环。
+
+---
+
+# 📅 2026-03-24 工作日报
+
+## 一、guoxue Eagle3 8×L20 QPS Peak Finder 分析归档
+
+**背景**：昨晚 guoxue Eagle3 8×L20 三阶段压测（Phase 1+2+3）全部完成，需要生成 REPORT.md 并与 vanilla 部署横向对比，验证 Eagle3 优化的实际增益。
+
+**做了什么**：合并 Phase 2+3 共 8 档数据跑 `qps-sweep-comparison`，生成容量曲线 HTML；生成完整 REPORT.md，补充 P50/P99 原始指标（Python 解析 token_list）、Eagle3 vs vanilla 对比表、保守/激进双建议（保守 0.28 req/s P99 友好 / 激进 0.317 req/s + 告警阈值 0.325）；归档 5 个日志目录的 README；清理测试污染数据（Phase 2 第一次运行因上轮在途请求未排空，TTFS P90=124.7s，与干净数据的 0.746s 相差 167×，作废并删除）。
+
+**结果**：Eagle3 ideal_rps = **0.3169 req/s（19.0 RPM）**，较 vanilla 0.2114 提升 **+50%（1.50×）**；极限 RPS +40%，decode 吞吐 +59%，E2E P90 +12%（长尾加剧，P99=207.7s 超 SLA，建议保守运行）。
+
+---
+
+## 二、guoxue H20 Phase 3 数据有效性核查 & logs 归档清理
+
+**背景**：`logs/` 中存在三个 `guoxue-v2-h20-phase3` 目录（3/22 两个几乎同时启动的 + 3/23 独立重测），需要判断哪个数据有效；同时 `data-pipeline/` 下积压了 58 个 log 文件，大量对应目录已删除。
+
+**做了什么**：通过解析 token_list 计算各档位 TTFS/E2E，对比发现 3/22 并发双路版本（1754/1759）的 `qps_0.5878` 成功率仅 11.7%，timeout 1819 个，TTFS P90 高达 273s——典型并发抢占污染；3/23 独立版本（1024）全部 4 档 timeout=0，E2E 严格单调递增，确认为有效数据，删除两个污染目录；对 58 个 data-pipeline log 逐一人工精确核定（自动模糊匹配误判多，手动修正），归档 37 个孤立/过期 log，保留 21 个活跃 log。
+
+**结果**：数据质量问题清零，有效 H20 Phase 3 数据确认；logs 目录整洁，活跃/归档分类清晰。
+
+---
+
+## 三、chart-32b Agent 调用 prompt2 批量转换
+
+**背景**：算法组接收到 40,315 条 Agent 框架调用原始记录后，需要将 `prompt2`（结构化占星参数）通过转换接口还原为完整的 `[system_msg, user_msg]` 格式，才能用于后续压测数据集构建。
+
+**做了什么**：分析转换接口（`POST /v1/chat/completions/messages`）输入输出结构，验证单条 Demo（system 2619 字符，user 98 字符）；编写 `convert_chart_agent_prompt2.py`，支持 5 并发、3 次重试指数退避、有序写出、断点续传，后台启动（PID 1200975）。
+
+**结果**：冒烟测试 20/20 通过；后台转换中，已处理 5,956 条（14.6%），速率约 0.75 条/s，整体耗时预计约 15 小时。
+
+---
+
+## 四、guoxue Eagle3 4×H20 Phase 2 分析 & EVAL_REPORT 数据修正
+
+**背景**：Eagle3 4×H20 Phase 2 已完成 2 档（rps=0.3415 和 rps=0.4519），需要分析进展，判断是否继续二分搜索；同时发现 EVAL_REPORT.md 中 H20 相关数据有三处错误需修正。
+
+**做了什么**：分析两档结果——rps=0.3415 通过 SLA（E2E P90=44.8s，余量充足），rps=0.4519 服务端并发激增至 144（Little's Law 反推 E2E≈320s），呈现 **Eagle3 陡崖型拐点**特征（真实 ideal_rps 预计 0.38~0.42）；EVAL_REPORT 修正三处错误（服务端承载并发从错误的 70 改为正确的 57，peak decode 吞吐区分 Phase 1 实测值与 Phase 3 值，Phase 1 H20 估算精度警告从"差 4%✓"改为"差 50%✗，仅测两档导致"）；Kill Phase 2 进程、服务重启后，启动单点探测（rps=0.5878，vanilla H20 ideal_rps，约 1 小时，进行中）。
+
+**结果**：EVAL_REPORT 数据修正完成，不再有误导性数值；Eagle3 4×H20 陡崖特征初步确认，单点探测结果出来后可继续二分锁定 ideal_rps。
+
+---
+
+# 📅 2026-03-25 工作日报
+
+## 一、guoxue Eagle3 4×H20 过载确认 & 生产端点双探针分析
+
+**背景**：guoxue H20 部署存在两条路径需要横向对比——`infra-base`（vanilla H20，相当于 Phase 3 直连）和 `infra-opti`（Eagle3 优化）。昨夜（3/24）Eagle3 探针数据已完成，今天上午还补跑了两个生产网关探针，需要完整分析并对齐报告体系。
+
+**做了什么**：
+1. **昨夜 Eagle3 探针分析**：对 `eagle3-4h20-probe-rps0.5878_20260324` 完成离线 CDF 分析 + Grafana 监控整合，撰写含 Vanilla vs Eagle3 横向对比的完整 REPORT.md；
+2. **双探针离线分析**（3/25 上午新跑）：对 infra-base（Vanilla）和 infra-opti（Eagle3）各执行 `benchmark-result-analysis`，生成 HTML + 7 张 PNG + REPORT.md；
+3. **报告体系对齐**（brainstorming → 方案 C+A）：更新 4 份文件——Phase 3 权威 REPORT.md 新增 §5 生产端点对比，EVAL_REPORT.md 拆分并发字段、修正 TTFT/TTFS 口径、新增 §4.6 生产端点观测节，model-context.md 新增 `h20_infra_base_probe_*` 11 个字段。
+
+**结果**：
+
+| 指标 | Phase 3 直连（权威）| infra-base 探针 | Eagle3 探针 |
+|------|:---:|:---:|:---:|
+| 成功率 | 99.91% ✅ | 100.00% ✅ | 75.15% ❌ |
+| TTFS P90 | 635ms ✅ | 752ms ✅ | 3,315ms ❌ |
+| E2E P90 | 114.9s ✅ | 189.6s ⚠️ | 600.6s ❌ |
+| Grafana 并发均值 | ~57 | 83.6 | 256.66 |
+
+- **Vanilla infra-base**：TTFT/TTFS 达标，E2E P90 略超 SLA（189.6s vs 180s），根因为测试期间共享背景流量 ~16 RPM 使并发从 57 升至 83.6，服务本身能力未变；
+- **Eagle3 二次确认过载**：两次独立实验（3/24 + 3/25）均显示 max sustainable RPS ≈ 0.52 req/s，低于测试速率 0.5878（超载 ~11.5%），decode 吞吐（1157~1224 t/s）低于 Vanilla（1260 t/s），**Eagle3 4×H20 当前不具备 SLA 合规能力**，如需继续评估应从 ≤ 0.45 req/s 重新探针。
+
+---
+
+## 二、chart-32b-agent QPS Peak Finder Phase 1 双路完成 & Phase 2 启动
+
+**背景**：chart-32b-agent 模型采用新数据集（40K+ Agent 框架调用转换后的 prompt2 数据，avg_output_len≈452 tokens），需对 8TP 和 4TP 两种部署各自从头执行 Phase 1 饱和探测，确定极限吞吐和 Phase 2 起始 RPS。
+
+**做了什么**：并行执行 8TP（con 从 50 步进至 410）和 4TP（con 从 25 步进至 480）的饱和探测；途中修复 7 个脚本的硬编码路径（日志目录从 `logs/chart-32b-agent-*` 迁移至 `logs/xinghan-chart-32b-v1-1-agent/`），并修复 `_write_phase1_checkpoint()` 函数签名不匹配导致的 checkpoint 写入 bug；Phase 1 完成后立即启动双路 Phase 2 自适应逼近（8TP 18:19，4TP 19:00）。
+
+**结果**：
+
+| 部署 | 峰值并发 | 峰值 decode 吞吐 | max_rps | Phase 2 起始 RPS |
+|------|---------|----------------|---------|----------------|
+| 8TP  | con=400 | 2056.8 t/s     | 4.55 req/s | 5.46 req/s |
+| 4TP  | con=400 | 1627.7 t/s     | 3.60 req/s | 4.32 req/s |
+
+- 8TP/4TP 吞吐比≈1.26×（远低于理论 2×），说明 32B 模型 TP 扩展存在显著通信开销；两路 Phase 2 已后台运行中。
+
+---
+
+## 二、analyze_peak_finder.py 全面加固（Phase 0/Phase 1 分析精度提升）
+
+**背景**：Phase 1 启动后发现分析脚本存在 5 个系统性问题：Phase 0 采样偏差（仅 500 条，误差最高 20%+）、无数据质量检查、Phase 1 max_rps 分母来源不明确、脚本调用链断裂（10 个 auto 脚本均未传 Phase 0 权威均值）。
+
+**做了什么**：
+1. Phase 0 从 500 条采样改为全量 tokenize，彻底消除采样误差；
+2. 新增 `<think>` 比例（≥70% 合格）和 `<con>` 残留（<5% 合格）两项数据质量检查，输出"可信/有缺陷"判断；
+3. Phase 0 输出 `DURATION_SECS/COOLDOWN_SECS/INIT_CON` 自动推算汇总块，可直接粘贴到脚本；
+4. Phase 1 新增 `--avg-output-len-phase0` 参数，优先用 Phase 0 权威值计算 max_rps，未传时回落 Phase 1 实测值并打 ⚠️；
+5. checkpoint 新增双值对比行（Phase 0 vs Phase 1 偏差、实际分母来源）；
+6. 更新 SKILL.md Phase 1 CLI 用法和 checkpoint 模板；
+7. 修复 10 个 auto 脚本调用链（逐一补传 `--avg-output-len-phase0`，`guoxue4h20` 额外新增变量定义）。
+
+**结果**：`analyze_peak_finder.py` 分析精度和自诊断能力全面提升，commit `8ae4a49`；旧脚本静默回落兼容，新脚本强制校验；Phase 0 首次成为"数据质量门控"而非仅输出均值。
+
+---

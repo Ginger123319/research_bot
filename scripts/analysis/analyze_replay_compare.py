@@ -5,7 +5,7 @@
 - 新回放：2026-03-29（取消上下文限制）
 """
 import sys, os, json, re
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark/src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../third_party/llm-benchmark/src'))
 from llm_benchmark.analysis.analysis.single_exp import load_exp_csv, analysis_row
 import pandas as pd
 

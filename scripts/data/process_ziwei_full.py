@@ -9,12 +9,8 @@ read_only_time=False：异步拉取 prompt URL，messages/prompt 字段有真实
 """
 
 import sys, os
-sys.path.insert(
-    0,
-    "/mnt/ai-infra/users/wnd/workspace/execute/guofan/third_party/data_analysis",
-)
-
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "third_party/data_analysis"))
 from datetime import datetime
 import pandas as pd
 

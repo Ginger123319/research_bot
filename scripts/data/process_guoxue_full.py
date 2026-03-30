@@ -13,12 +13,8 @@ xinghan-guoxue-72b-v1-2-reason 完整数据处理脚本
 """
 
 import sys, os, json, ast
-sys.path.insert(
-    0,
-    "/mnt/ai-infra/users/wnd/workspace/execute/guofan/third_party/data_analysis",
-)
-
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "third_party/data_analysis"))
 from datetime import datetime
 import pandas as pd
 

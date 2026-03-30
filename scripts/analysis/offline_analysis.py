@@ -44,8 +44,8 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 
 # ── 引入 llm_benchmark 分析模块 ─────────────────────────────
-BENCH_SRC = Path("/mnt/ai-infra/users/wnd/workspace/execute/guofan/third_party"
-                 "/speculative-decoding-benchmark/3rdparty/llm-benchmark/src")
+_PROJECT = Path(__file__).resolve().parents[2]
+BENCH_SRC = _PROJECT / "third_party/llm-benchmark/src"
 sys.path.insert(0, str(BENCH_SRC))
 
 from llm_benchmark.analysis.analysis.single_exp import load_exp_csv, analysis_response

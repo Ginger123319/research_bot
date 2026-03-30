@@ -17,7 +17,7 @@ import shutil
 import re
 from pathlib import Path
 
-PROJECT_DIR = Path("/mnt/ai-infra/users/wnd/workspace/execute/guofan")
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 LOGS_DIR = PROJECT_DIR / "logs"
 
 SRC_FLAT = [

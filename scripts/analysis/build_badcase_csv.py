@@ -19,8 +19,7 @@ from pathlib import Path
 import pandas as pd
 
 _PROJECT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(_PROJECT / "third_party/speculative-decoding-benchmark"
-                        "/3rdparty/llm-benchmark/src"))
+sys.path.insert(0, str(_PROJECT / "third_party/llm-benchmark/src"))
 
 
 def find_result_csv(qps_dir: Path) -> Path | None:

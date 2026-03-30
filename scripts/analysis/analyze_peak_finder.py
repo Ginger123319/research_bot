@@ -46,7 +46,7 @@ import pandas as pd
 _PROJECT_DIR = Path(__file__).resolve().parents[2]
 _LLM_BENCH_SRC = (
     _PROJECT_DIR
-    / "third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark/src"
+    / "third_party/llm-benchmark/src"
 )
 if str(_LLM_BENCH_SRC) not in sys.path:
     sys.path.insert(0, str(_LLM_BENCH_SRC))

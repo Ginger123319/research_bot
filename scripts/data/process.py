@@ -20,7 +20,7 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-PROJECT_DIR = Path("/mnt/ai-infra/users/wnd/workspace/execute/guofan")
+PROJECT_DIR = Path(__file__).resolve().parents[2]
 SPECFORGE_DIR = Path("/mnt/ai-infra/users/wnd/workspace/repo/SpecForge")
 PYTHON = sys.executable
 

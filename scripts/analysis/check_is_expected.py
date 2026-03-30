@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 import sys, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark/src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../third_party/llm-benchmark/src'))
 from llm_benchmark.analysis.analysis.single_exp import load_exp_csv, analysis_row
 import pandas as pd
 import numpy as np

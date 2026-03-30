@@ -389,11 +389,33 @@ sleep ${COOLDOWN_SECS:-60}
 
 ### SLA 基准
 
-| 指标 | 通用基准 | 说明 |
-|------|---------|------|
-| TTFS P90 | ≤ 1500 ms | 首句延迟 |
-| E2E P90 | ≤ 150 s | 完整响应上限 |
-| 模型特定 | 见下方注释 | 如 tianji: E2E P95 ≤ 400ms |
+| 指标 | 理想基准 | 可容忍基准 | 说明 |
+|------|---------|-----------|------|
+| TTFS P90 | ≤ 1500 ms | ≤ 2250 ms | 首句延迟；两条划线对应两个 RPS 锚点 |
+| E2E P99 | ≤ 170 s | ≤ 170 s | 完整响应上限（两条线共用同一 E2E 标准） |
+| 模型特定 | 见下方注释 | — | 如 tianji: E2E P95 ≤ 400ms |
+
+### 两个 RPS 锚点的定义
+
+Phase 2 的搜索过程产出两个关键锚点，均从同一批实验数据中识别：
+
+| 锚点 | TTFS P90 | E2E P99 | 含义 |
+|------|---------|---------|------|
+| **可容忍 RPS**（tolerable_rps） | ≤ 2250 ms | ≤ 170 s | TTFS 仍在可接受范围内的最高 RPS；是单副本峰值上限 |
+| **理想 RPS**（ideal_rps） | ≤ 1500 ms | ≤ 170 s | 服务质量达理想水准的最高 RPS；是副本扩缩容依据 |
+
+> **识别方式**：Phase 2 bracket 搜索以 **ideal_rps**（TTFS P90 ≤ 1500ms）为主目标收敛；
+> `analyze_peak_finder.py` 同时扫描所有 Phase 2 档位数据，找出 TTFS P90 首次穿越 2250ms 阈值的最高通过点，作为 `tolerable_rps`，无需额外跑实验。
+>
+> **典型分布示意**：
+> ```
+> 高 RPS ←────────────────────────────────→ 低 RPS
+>
+>  extreme_rps   [tolerable_rps]         [ideal_rps]
+>       ↑               ↑                     ↑
+>  SLA 全超标     TTFS P90 ≤ 2250ms        TTFS P90 ≤ 1500ms
+>                E2E P99 ≤ 170s           E2E P99 ≤ 170s
+> ```
 
 ### 两阶段决策（Phase 2a）
 
@@ -454,13 +476,33 @@ sleep ${COOLDOWN_SECS:-60}
 | decode_throughput | XX tokens/s | XX | +X% |
 | max_active_requests | XX | XX | ±X |
 | TTFS P90 | XXX ms | XXX ms | ▲/▼ |
-| E2E P90 | XX s | XX s | ▲/▼ |
+| E2E P99 | XX s | XX s | ▲/▼ |
 | SLA 状态 | ✅/❌ | — | — |
 
 当前判断：[未达极限 / 接近极限 / 极限已锚定 / 理想RPS已锚定]
 建议下一档 QPS：X.XX
 如有调整意见请在此回复 ↓
 ```
+
+---
+
+### Phase 2 收敛后：汇总分析
+
+Phase 2 bracket 收敛后，运行以下命令从所有 `rps*/` 目录中同时识别 `ideal_rps` 和 `tolerable_rps`：
+
+```bash
+# Phase 2 汇总分析：识别两个 RPS 锚点
+.venv/bin/python3 scripts/analysis/analyze_peak_finder.py \
+    --phase 2 \
+    --dir "${OUTPUT_BASE}" \
+    --ttfs-p90-limit 1.5 \
+    --ttfs-tolerable-p90-limit 2.25 \
+    --e2e-p99-limit 170.0
+```
+
+产出：
+- `ideal_rps`：TTFS P90 ≤ 1500ms 且 E2E P99 ≤ 170s 的最高通过档
+- `tolerable_rps`：TTFS P90 ≤ 2250ms 且 E2E P99 ≤ 170s 的最高通过档（高于 ideal_rps）
 
 ---
 
@@ -511,8 +553,10 @@ Phase 3 完成后，先用 `analyze_peak_finder.py --phase 3` 快速汇总 SLA �
     --phase 3 \
     --dir "${OUTPUT_DIR}" \
     --ttfs-p90-limit 1.5 \
-    --e2e-p90-limit 150.0
+    --e2e-p99-limit 170.0
 ```
+
+> **注**：`tolerable_rps` 已在 Phase 2 汇总分析中识别，Phase 3 仅做 SLA ✅/❌ 验证，无需再传可容忍阈值。
 
 ---
 
@@ -523,7 +567,8 @@ Phase 3 完成后，先用 `analyze_peak_finder.py --phase 3` 快速汇总 SLA �
 | `peak_decode_throughput` | Phase 1 |
 | `max_running_concurrency` | Phase 1 |
 | `extreme_rps`（极限 RPS） | Phase 2 |
-| `ideal_rps`（理想 RPS） | Phase 2 |
+| `tolerable_rps`（可容忍 RPS） | Phase 2（TTFS P90 ≤ 2250ms 的最高通过档） |
+| `ideal_rps`（理想 RPS） | Phase 2（TTFS P90 ≤ 1500ms 的最高通过档） |
 | SLA 曲线图表 + REPORT.md | Phase 3 → qps-sweep-comparison |
 
 ---

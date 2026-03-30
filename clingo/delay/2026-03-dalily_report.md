@@ -616,7 +616,7 @@ format:
 
 ---
 
-## 二、chart-32b-agent QPS Peak Finder Phase 1 双路完成 & Phase 2 启动
+## 三、chart-32b-agent QPS Peak Finder Phase 1 双路完成 & Phase 2 启动
 
 **背景**：chart-32b-agent 模型采用新数据集（40K+ Agent 框架调用转换后的 prompt2 数据，avg_output_len≈452 tokens），需对 8TP 和 4TP 两种部署各自从头执行 Phase 1 饱和探测，确定极限吞吐和 Phase 2 起始 RPS。
 
@@ -633,7 +633,7 @@ format:
 
 ---
 
-## 二、analyze_peak_finder.py 全面加固（Phase 0/Phase 1 分析精度提升）
+## 四、analyze_peak_finder.py 全面加固（Phase 0/Phase 1 分析精度提升）
 
 **背景**：Phase 1 启动后发现分析脚本存在 5 个系统性问题：Phase 0 采样偏差（仅 500 条，误差最高 20%+）、无数据质量检查、Phase 1 max_rps 分母来源不明确、脚本调用链断裂（10 个 auto 脚本均未传 Phase 0 权威均值）。
 
@@ -647,5 +647,89 @@ format:
 7. 修复 10 个 auto 脚本调用链（逐一补传 `--avg-output-len-phase0`，`guoxue4h20` 额外新增变量定义）。
 
 **结果**：`analyze_peak_finder.py` 分析精度和自诊断能力全面提升，commit `8ae4a49`；旧脚本静默回落兼容，新脚本强制校验；Phase 0 首次成为"数据质量门控"而非仅输出均值。
+
+---
+
+# 📅 2026-03-26 工作日报
+
+## 一、chart-32b-agent 8TP/4TP 评估完整收尾
+
+**背景**：昨夜 chart-32b-agent 8TP/4TP 两路 Phase 2/3 完成，今天需要合并数据、生成容量曲线和最终报告，并用真实 Agent 数据做生产回放验证，完成全流程闭环。
+
+**做了什么**：
+1. 修复 Phase 3 汇总脚本 bug（循环内误传子目录而非父目录给分析脚本），合并 Phase 2+3 各 10 档数据；
+2. 生成 4TP/8TP 双组容量曲线图表（3 个 HTML），撰写完整 REPORT.md（三锚点摘要 + 8TP vs 4TP 对比）；
+3. 执行 8TP 生产回放压测（Agent V2 数据集，118 RPM），分析 5,779 条结果，生成 REPORT.md + 7 张图表；
+4. 更新 INDEX.yaml（`eval_status: completed_v2`）和 results/README.md。
+
+**结果**：
+
+| 配置 | 理想 RPS | 理想 RPM | TTFS P90@SLA 边界 |
+|------|---------|---------|-----------------|
+| 4TP（infra-opti）| 2.22 req/s | 133 RPM | 1,488ms（裕量 0.8%）|
+| 8TP（infra）     | 3.83 req/s | 230 RPM | 1,443ms（裕量 3.8%）|
+| 8TP/4TP 倍率 | **1.73×** | — | — |
+
+- V2 数据集（含完整 Agent 工具调用序列）导致 QPS 比 V1 低约 50%，根因是 avg_output_len 大幅增加；
+- **回放结果**：成功率 100%，TTFT P90=0.207s，E2E P90=14.034s，SLA 全项大幅达标，可安全支撑当前生产流量及短期增长至 ~200 RPM。
+
+---
+
+## 二、chart-deep-v5-2-235B 8×H20 QPS 评估启动 & relay 修复
+
+**背景**：`chart_deep_v5-2_235B` 是新接入模型，上午完成 Phase 1 饱和探测后，relay 脚本未能自动衔接 Phase 2，需排查修复，确保后续评估自动化接力正常运行。
+
+**做了什么**：确认 Phase 1 完成（con=60→120→180，于 con=180 饱和，PEAK_RPS=1.2911 req/s）；定位并修复 relay 脚本两个 bug——①checkpoint 文件首次出现即提前 break（此时 Phase 1 仍在继续跑后续档）；②checkpoint 格式为 Markdown 表格，旧 grep 模式不匹配触发 `set -e` 退出；清理因多次调试产生的 2~3 个重复 Phase 2 进程及污染目录；干净重启 Phase 2（14:41）。
+
+**结果**：relay 修复落地（Bug 1/2 均已记录，防止复现）；Phase 2 单路干净运行（PID 3204661），已完成 rps=1.5493（预期过载），正在收敛第 2 档 rps=1.3582；relay 统一接管 Phase 2/3 全流程，不再需要手动干预。
+
+---
+
+## 三、guoxue Eagle3 4×H20 调参探针测试
+
+**背景**：前两次测试（3/24、3/25）均确认 Eagle3 4×H20 在 rps=0.5878 严重过载（成功率 75%，E2E P90=600s），根因是 spec_accept_length≈0.67 处于中等接受率，过多 rejected token 浪费算力。参考 TurboSpec 论文 §4.1.2 结论，减少投机 token 数在中等接受率下可提升 goodput，用户据此缩短了 speculative 参数。
+
+**做了什么**：服务端将 speculative 参数从 `steps=3, draft_tokens=4` 调整为 `steps=2, draft_tokens=3`；编写新探针脚本（与前次参数完全一致，仅服务端配置变化），后台启动（18:46，PID 3384463），预计 19:46 完成。
+
+**结果**：探针运行中，完成后与 3/25 探针对比 TTFS/E2E 变化量，判断调参是否能将 max_rps 从 ~0.52 提升至 0.5878 以上。
+
+---
+
+# 📅 2026-03-27 工作日报
+
+## 一、chart-deep-v5-2-235B 评估：发现并修复 128 并发限制导致的全链路低估
+
+**背景**：昨日（3/26）chart-deep-v5-2-235B 的 Phase 1 于 con=180 显示"饱和"，Phase 2 首档 rps=1.3582 判定为"FAIL"，结论看起来异常保守。今天深入排查发现根因——服务端配置了 `--max-running-requests 128`，当 con>128 时内部并发被硬截断，造成"假饱和"和"假失败"，导致 max_rps 整体低估约 23%。
+
+**做了什么**：修复三个脚本的问题（更新 SERVER_URL、删除硬编码 `MAX_REQUESTS=5621`、支持 `PREV_DIR`/`INIT_LO` 环境变量注入透传）；在新的无限制服务上从 con=180 重跑 Phase 1（历经 con=180→270→283→297→311→326，于 con=326 确认饱和）；Phase 1 完成后 relay 自动触发 Phase 2（18:57 启动），以旧 PASS 值 1.3360 为 LO 起建 bracket。
+
+**结果**：
+
+| 指标 | 旧跑（受 128 限制） | 新跑（无限制） | 变化 |
+|------|-----------------|-------------|------|
+| 峰值 decode 吞吐 | 1298.9 tok/s | **1603.6 tok/s** | **+23.5%** |
+| max_rps_estimate | 1.2911 req/s | **1.5940 req/s** | **+23.5%** |
+| 真实饱和并发 | 128（人为截断）| **326** | — |
+
+Phase 2 第一档 rps=1.4696 已 FAIL（TTFS P90=1838ms），bracket 收敛至 [1.3360, 1.4696]，下一档 rps=1.4012 正在冷却后探测，预计今晚完成收敛。
+
+---
+
+## 二、guoxue Eagle3 4×H20 SLA 边界定位完成
+
+**背景**：此前（3/24~3/25）多次确认 Eagle3 4×H20 在 rps=0.5878 严重过载（成功率 75%），今天通过调参后的服务（speculative steps=2, draft_tokens=3），以多档位探针逐步逼近真实 ideal_rps。
+
+**做了什么**：补充分析旧 Phase 2 rps=0.3415 档（SLA 全达标，E2E P90=44.8s）；依次运行 rps=0.40（20 分钟探针）和 rps=0.43（22 分钟探针），全程监控 TTFS/E2E 变化；中间经历进程残留导致多次重启（每次用 `pgrep` 确认清空后重新发起），最终获得干净数据。
+
+**结果**：
+
+| RPS | 成功率 | TTFS P90 | E2E P90 | 判定 |
+|-----|--------|----------|---------|------|
+| 0.5878（3/25） | 75.15% | 3.315s | 600.6s | ❌ 严重过载 |
+| 0.43（今日） | 100% | 1.192s | 182.1s | ❌ 临界超标（+1.1%）|
+| **0.40（今日）** | **100%** | **0.901s** | **107.2s** | **✅ ideal_rps** |
+| 0.3415（Phase2）| 100% | 0.594s | 44.8s | ✅ |
+
+**ideal_rps = 0.40 req/s（24 RPM）** 定位完成，SLA 边界区间 `0.40 < ideal_rps < 0.43`；下一步执行 Phase 3 四点网格验证后出最终报告。
 
 ---

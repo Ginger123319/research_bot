@@ -453,6 +453,29 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 ## 中间文件（说明不直接使用）
 - 按天分片、各窗口采样文件
 
+## 输入输出分布
+使用 `scripts/data/compute_token_stats.py` 对核心交付文件（优先 `_all.csv`）统计：
+
+| 指标 | 数值 |
+|------|------|
+| input tokens (mean / p50 / p90 / p99 / max) | ... |
+| output tokens (mean / p50 / p90 / p99 / max) | ... |（old_response 全空时省略）
+| old_response 字符长度 (mean / p50 / p90) | ... |（old_response 全空时省略）
+| 统计样本 | 全量/采样 N 条，来源：`xxx_all.csv` |
+
+**执行命令：**
+```bash
+python scripts/data/compute_token_stats.py \
+  --csv datas/output_<model>/<model>_all.csv \
+  --tokenizer /mnt/ai-infra/models/Qwen2.5-72B-Instruct \
+  [--sample 0.05]   # 超过 100k 行建议加 --sample 0.05~0.1
+```
+
+> ⚠️ **注意事项**：
+> - 若 `_all.csv` 为 DataConverter 原生 3 列索引文件（无 messages 列），改用日期分片 CSV 合并后统计
+> - `old_response` 全空（未回填）时，output token 行可省略，加注说明
+> - 大文件（>100k 行，如 tianji-querysafety）采样 5% 估算即可
+
 ## 验证结论
 - 与基准/同事数据的对比结果
 - 各步骤验证检查项是否通过
@@ -472,7 +495,7 @@ df = df[~df["messages"].apply(has_list_content)].reset_index(drop=True)
 | 拼接后 | `df.diff()[diff > 5min]` 数量应为 0 |
 | 插值后 | 峰值 RPM 达到 `TARGET_RPM`；messages 有内容行数 |
 | 过滤后 | 行数变化量；输出文件大小 |
-| README | 数据来源、model_list 别名、逐步参数、核心文件加粗标注、验证结论均已填写 |
+| README | 数据来源、model_list 别名、逐步参数、核心文件加粗标注、**输入输出分布表**（`compute_token_stats.py`）、验证结论均已填写 |
 
 ---
 

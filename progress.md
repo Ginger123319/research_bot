@@ -1361,3 +1361,432 @@ mv chart-32b-agent-* peak_finder_chart_agent_*.log xinghan-chart-32b-v1-1-agent/
 ### 结论
 
 8TP 在使用真实 Agent 调用数据（含完整占星 system prompt）、118 RPM 生产峰值下回放，所有 SLA 指标大幅达标，可安全支撑当前生产流量及短期内业务增长至约 200 RPM 量级。
+
+---
+
+## 2026-03-26 下午场：Eagle3 4×H20 调参后探针测试
+
+### 背景
+
+基于 [TurboSpec 论文](https://arxiv.org/html/2406.14066v3) §4.1.2 **Understanding Goodput** 的研究结论：
+
+> 在接受率较低时（本场景接受率 ≈ 0.67），应减少投机 token 数量，以避免过多的 rejected token 浪费计算资源。较短的 proposal 在中等接受率下能带来更高的 goodput。
+
+用户据此将服务端 Eagle3 参数调整：
+- **调整前**：`--speculative-num-steps 3 --speculative-eagle-topk 1 --speculative-num-draft-tokens 4`
+- **调整后**：`--speculative-num-steps 2 --speculative-eagle-topk 1 --speculative-num-draft-tokens 3`
+
+### 实现功能
+
+1. **新建探针脚本** `scripts/benchmark/run_guoxue_eagle3_4h20_probe_tuned.sh`
+   - 与前次探针（2026-03-25 11:56）参数完全一致（RPS=0.5878，duration=3600s，num_requests=2117）
+   - 端点：`infra-opti-xinghan-guoxue-p72b-v12-reason`（Eagle3 4×H20）
+   - 仅服务端 speculative 参数变化，方便对比
+
+2. **后台启动探针测试**
+   - 开始时间：2026-03-26 18:46:40
+   - PID：3384463
+   - 日志：`logs/data-pipeline/eagle3-4h20-probe-tuned-rps0.5878_20260326_1846.log`
+   - 输出目录：`logs/xinghan-guoxue-72b-v1-2-reason/eagle3-4h20-probe-tuned-rps0.5878_20260326_1846/`
+
+### 遇到的问题及解决
+
+- 无异常，服务冒烟测试 HTTP 200，任务正常启动
+
+### 预计完成
+
+约 1 小时后（19:46），届时需运行 `analyze_peak_finder.py` + `offline_analysis.py` 分析结果。
+
+### 对比基准
+
+| 维度 | 旧探针（20260325_1156） | 新探针（20260326_1846） |
+|------|----------------------|----------------------|
+| speculative steps | 3 | **2** |
+| draft tokens | 4 | **3** |
+| 接受率 | ~0.67 | ~0.67（相同服务数据） |
+| RPS | 0.5878 | 0.5878 |
+| 旧结论 | ❌ 成功率 75.15%，E2E P90=600s，严重过载 | 待观测 |
+
+---
+
+## 2026-03-26 晚间场：chart-deep-v5-2-235B 8×H20 QPS 评估 Phase 1 完成 + relay 修复 + Phase 2 启动
+
+### 背景
+
+承接上午场已启动的 chart-deep-v5-2-235B 8×H20 QPS 评估流程（Phase 1 于 11:49 启动），本场处理 Phase 1 完成后的接力问题，修复 relay 脚本 bug，完成 Phase 2 干净启动。
+
+### 实现功能
+
+#### 1. Phase 1 完成确认
+
+Phase 1（`run_phase1_auto_chart_deep_8h20.sh`）于 14:28 完成，共跑 3 个并发档位：
+
+| 档位 | 完成时间 | decode_throughput | max_rps_estimate | 吞吐增幅 |
+|------|---------|-------------------|-----------------|---------|
+| con=60 | 12:35 | 976.606 tok/s | 0.9708 req/s | — |
+| con=120 | 13:31 | 1287.415 tok/s | 1.2797 req/s | +31.83% |
+| con=180 | 14:28 | 1298.889 tok/s | **1.2911 req/s** | +0.89% ✅ 已饱和 |
+
+- **PEAK_RPS = 1.2911 req/s**，Phase 2 起始 START_RPS = 1.5493 req/s（× 1.2）
+- checkpoint 文件：`logs/chart-deep-v5-2/chart-deep-v5-2-phase1_20260326_1149/phase1_checkpoint.md`
+
+#### 2. 修复 `watch_and_relay_chart_deep_8h20.sh` 两个 Bug
+
+**Bug 1（提前退出）**：
+- 原因：relay 的 Phase 1 等待循环在 checkpoint 文件一出现（con=60 结束后写入）就 `break`，而此时 Phase 1 仍在继续跑 con=120、con=180
+- 修复：在循环内增加二次判断，检查 Phase 1 run log 是否包含 `"Phase 1 全部档位完成"` 或 `NEXT_CON=SATURATED`，只有确认完成才 break
+
+**Bug 2（PEAK_RPS 解析失败导致 set -e 退出）**：
+- 原因：checkpoint 是 Markdown 表格格式 `| max_rps_estimate | 0.9708 req/s |`，而 grep 用的是 `max_rps_estimate\s*=\s*\K` 格式，无法匹配，grep 返回 exit code 1，触发 `set -euo pipefail` 退出
+- 修复：改为 `grep -oP '\|\s*max_rps_estimate\s*\|\s*\K[0-9]+\.[0-9]+'` + `|| true`，并取 `tail -1` 获取最后档位值（最高并发的估算值）
+
+#### 3. 清理重复 Phase 2 进程
+
+由于多次调试，出现了 2~3 个 Phase 2 进程同时向同一服务器发请求（各自都在 rps=1.5493），导致实际负载翻倍，测量结果不可信。完整清理步骤：
+1. 杀掉所有 Phase 2 进程（PID: 3197682/3197713、3199504/3199524、3203943/3204003）
+2. 删除两个污染目录：`chart-deep-v5-2-phase2_20260326_1434`、`chart-deep-v5-2-phase2_20260326_1436`
+3. 删除对应 log：`phase2_run_20260326_1434.log`、`phase2_run_20260326_1436.log`
+
+#### 4. 干净启动 Phase 2 + Relay（14:41）
+
+- Phase 2 脚本：`run_phase2_auto_chart_deep_8h20.sh`，`PEAK_RPS=1.2911 START_RPS=1.5493 PRODUCTION_RPS=0.5`
+- 输出目录：`logs/chart-deep-v5-2/chart-deep-v5-2-phase2_20260326_1441/`
+- Relay 日志：`logs/chart-deep-v5-2/relay_20260326_1441.log`（PID 3204623）
+- 监控命令：`tail -f logs/chart-deep-v5-2/relay_20260326_1441.log`
+
+#### 5. Phase 2 进展（截至本日志写入时，20:18）
+
+- 已完成 rps=1.5493（预期违 SLA），上界压缩
+- 正在跑 rps=1.3582（第二档，bracket 二分中点）
+
+### 遇到的错误及解决
+
+| 错误 | 原因 | 解决 |
+|------|------|------|
+| relay 12:36 就退出，Phase 2 从未启动 | Bug 1 + Bug 2（见上） | 修复 relay 脚本，重新启动 |
+| 两个 Phase 2 同时跑，数据污染 | 手动启动 Phase 2 后又启动 relay（relay 会再启动一次 Phase 2） | 原则：relay 管理 Phase 2，**不应手动启动 Phase 2** |
+| `Command failed to spawn: Aborted` | Cursor shell 执行 kill 命令偶发失败 | 重试，或直接在服务器终端执行 |
+
+### 当前状态（20:18）
+
+| 进程 | PID | 状态 |
+|------|-----|------|
+| Phase 2 bash 脚本 | 3204661 | ✅ 运行中 |
+| Phase 2 Python benchmark | 3204676 | ✅ 运行中（rps=1.3582） |
+| Relay 接力监控 | 3204623 | ✅ 运行中 |
+
+### 预计后续时间线
+
+| 节点 | 预计时间 |
+|------|---------|
+| Phase 2 完成（5～8 轮收敛） | 约 19:00～21:00（已在进行中） |
+| Phase 3 自动触发（4 点网格） | Phase 2 完成后自动，约 +3.3h |
+| 全流程完成 | 约 22:00～次日 00:00 |
+
+---
+
+## 📅 2026-03-27 会话记录
+
+### 📌 本次会话主要目标
+
+发现并修复旧跑受服务端 `--max-running-requests 128` 限制导致的"假饱和"与"假失败"问题；重跑 Phase 1（从 con=180）+ Phase 2（无限制），获取真实性能边界。
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. 🔍 问题诊断与根因分析
+
+**发现旧跑全链路受 128 并发上限污染**：
+
+| 阶段 | 档位 | 污染方式 | 影响 |
+|------|------|---------|------|
+| Phase 1 旧跑 | con=180 | max_active 被限制在 128，吞吐提升只有 0.89% | 假性饱和，max_rps_estimate 低估 23% |
+| Phase 2 旧跑 | rps=1.3582 | max_active=137 > 128，服务端排队 TTFS P90 飙升至 4125ms | 假性 FAIL，bracket 被人为截断 |
+| Phase 2 旧跑 | ideal_rps=1.3360 | max_active=131 轻超 128，TTFS 裕量仅 8.5% | ideal_rps 偏保守下界 |
+| Phase 3 旧跑 | 全档 | 基于假 ideal_rps=1.3360 构建网格 | 结果形态参考有效，绝对值偏低 |
+
+#### 2. 🔧 三个脚本修复（Phase 1/2/3 全链路）
+
+**修复内容**：
+
+| 脚本 | 问题 | 修复方式 |
+|------|------|---------|
+| `run_phase1_auto_chart_deep_8h20.sh` | SERVER_URL 为旧 IP `172.21.65.228` | 更新为 `172.21.65.249` |
+| `run_phase1_auto_chart_deep_8h20.sh` | `MAX_REQUESTS=5621` 硬编码（实为 con=60 估算值，高并发档会导致数据集提前耗尽） | 删除 `MAX_REQUESTS=5621`，改为脚本动态计算（数据集实有 288,595 行） |
+| `run_phase1_auto_chart_deep_8h20.sh` | `PREV_DIR` 初始值为空，con=180 续跑时无旧 con=120 基准 | 改为 `PREV_DIR="${PREV_DIR:-}"` 支持环境变量注入旧目录路径 |
+| `run_phase1_auto_chart_deep_8h20.sh` | AUTO_PHASE2 触发 Phase 2 时未透传 `INIT_LO` | 补充 `INIT_LO="${INIT_LO:-}"` 环境变量透传，让 Phase 2 从旧 PASS 值起建 bracket |
+| `run_phase2_auto_chart_deep_8h20.sh` | SERVER_URL 为旧 IP | 更新为 `172.21.65.249` |
+| `run_phase3_grid_chart_deep_8h20.sh` | SERVER_URL 为旧 IP | 更新为 `172.21.65.249` |
+
+#### 3. 🚀 Phase 1 新跑（2026-03-27 12:47 启动）
+
+启动命令：
+```bash
+INIT_CON=180 \
+PREV_DIR="logs/chart-deep-v5-2/chart-deep-v5-2-phase1_20260326_1149/con120" \
+AUTO_PHASE2=1 \
+INIT_LO=1.3360 \
+nohup bash scripts/benchmark/run_phase1_auto_chart_deep_8h20.sh \
+    > logs/chart-deep-v5-2/phase1_run_20260327_1247.log 2>&1 &
+```
+
+**完整 Phase 1 数据对比**：
+
+| 档位 | decode (tok/s) | 增幅 | max_active | 备注 |
+|------|---------------|------|-----------|------|
+| con=120（旧，参考） | 1287.4 | — | 120 | 旧跑可信基准 |
+| con=180（新） | 1429.1 | **+11.01%** | 180 | 去限制后立即显著提升 |
+| con=270（新） | 1502.2 | +5.11% | 270 | — |
+| con=283（新） | 1543.9 | +2.77% | 283 | — |
+| con=297（新） | 1560.0 | +1.04% | 297 | 接近饱和 |
+| con=311（新） | ~1597.5 | ~+2.4% | 311 | — |
+| **con=326（新）** | **1603.6** | **+0.38% ✅ 饱和** | 326 | 饱和确认 |
+
+**关键结论**：
+- `peak_decode_throughput = 1603.6 tok/s`
+- `max_rps_estimate = 1.5940 req/s`（旧值 1.2911，**提升 +23.5%**）
+- 真实饱和并发 = 326（旧限制截断在 128）
+- Phase 2 `START_RPS = 1.5940 × 1.2 = 1.9128 req/s`（实际因 INIT_LO=1.3360 从 1.4696 起探）
+
+#### 4. 🔄 Phase 2 新跑（2026-03-27 18:57 自动启动）
+
+- 输出目录：`logs/chart-deep-v5-2/chart-deep-v5-2-phase2_20260327_1857/`
+- INIT_LO=1.3360（旧 PASS，新服务大概率仍 PASS）
+- 未设 INIT_HI（旧 1.3582 的 FAIL 不可信）
+- 第一档：`rps=1.3360 × 1.1 = 1.4696`，**FAIL**（TTFS P90=1838ms，超标 23%）
+- 当前状态：bracket LO=1.3360, HI=1.4696，宽度 10%，下一档 `√(1.3360×1.4696) = 1.4012`
+- 正在冷却 510s 后探 rps=1.4012
+
+#### 5. 📊 rps=1.3360 档位离线分析
+
+**目录**：`results/chart-deep-v5-2-phase2-rps1.3360-20260326/`
+
+核心产出：
+- `chart_deep_phase2_rps1.3360_analysis.html`（交互式 HTML，1720KB）
+- 7 张 PNG 图表（TTFT/TTFS/E2E/ITL CDF，并发时间线，成功率时间线）
+- `REPORT.md`（含完整分析，128 限制指纹解读，相邻档位对比表）
+
+关键指标：
+- 成功率：99.91%（3367/3367，仅 3 失败）
+- TTFS P90：1382ms（裕量 8.5%，TTFT P99=1327ms 有长尾跳升，128 排队信号）
+- E2E P90：109.1s（裕量 27%）
+- Decode：1302.9 tok/s
+
+#### 6. 📝 中间分析报告生成
+
+- `results/models/chart-deep-v5-2-235B/model-context.md`（模型配置、数据背景、阶段性结论）
+- `results/models/chart-deep-v5-2-235B/EVAL_REPORT_interim.md`（中间评估报告，含旧/新跑对比、关键发现、128 限制量化影响分析）
+
+---
+
+### 🐛 遇到的错误及解决
+
+| 错误 | 原因 | 解决方案 |
+|------|------|---------|
+| Shell `Command failed to spawn: Aborted` | Cursor 内置 shell 不支持某些 nohup 复杂写法 | 简化为单行 nohup 命令，环境变量前置传入 |
+| Phase 1 旧跑于 con=180 假性饱和 | 服务端 `--max-running-requests 128`，con=180 时内部实际并发被卡在 128 | 新服务已去限制，从 con=180 重跑 |
+| Phase 2 旧跑 rps=1.3582 假性 FAIL | max_active=137>128，排队导致 TTFS P90 飙升至 4125ms | 新 Phase 2 不传 INIT_HI，让算法重新找真实失败点 |
+| Phase 1 脚本 `MAX_REQUESTS=5621` 高并发档数据集提前耗尽 | 脚本写入时按 con=60 估算了 5621，高并发档 5621 条远不够 2520s | 删除硬编码上限，动态计算（数据集有 288,595 行） |
+| Phase 2 INIT_LO 无法通过 AUTO_PHASE2 透传 | 旧脚本写法 `${INIT_LO:+INIT_LO="${INIT_LO}"}` 在 bash env 前缀位置不支持 | 改为 `INIT_LO="${INIT_LO:-}"` 统一赋值（空字符串时 Phase 2 脚本忽略） |
+
+---
+
+### 📊 当前进行中任务（2026-03-27 19:30 状态）
+
+| 模型 | 阶段 | 当前档位 | 预计完成 |
+|------|------|---------|---------|
+| chart-deep-v5-2-235B 8×H20 | **Phase 2 新跑** | rps=1.4012（冷却后启动） | 约 21:30~22:00 |
+
+---
+
+### ⏭️ 下次会话需关注
+
+1. **chart-deep Phase 2 新跑结果**：
+   - 输出目录：`logs/chart-deep-v5-2/chart-deep-v5-2-phase2_20260327_1857/`
+   - 日志：`logs/chart-deep-v5-2/phase1_run_20260327_1247.log`（Phase 1+2 合并日志）
+   - Phase 2 收敛后自动触发 Phase 3 网格验证
+   - 完成后运行 `qps-peak-finder-analysis` Skill 生成 REPORT.md
+
+2. **业务峰值 RPM 待确认**：当前保守托底 30 RPM（0.5 req/s），实际值需从 Grafana 获取后更新 model-context.md 并重新计算实例数
+
+3. **最终 EVAL_REPORT.md**：
+   - 更新 `results/models/chart-deep-v5-2-235B/EVAL_REPORT_interim.md` → 覆盖为正式版
+   - 关键预期结论：`extreme_rps≈1.5940`, `ideal_rps≈1.40~1.43 req/s`（84~86 RPM）
+
+---
+
+## 📅 2026-03-27 guoxue Eagle3 4×H20 多档位 SLA 边界探针
+
+> **会话时间**：2026-03-27 16:00 — 19:00
+> **主题**：guoxue-72b-v1-2-reason Eagle3 4×H20 多档位探针测试，定位 ideal_rps SLA 边界
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. Phase2 rps=0.3415 离线分析与归档
+- 发现 Phase 2 实验目录中 `rps0.4519` 为空（脚本 EXIT_TRAP 提前退出，未写入数据），仅 `rps0.3415` 有完整 CSV
+- 运行 `offline_analysis.py` 对 rps=0.3415 做完整分析：成功率 100%，TTFT P90=0.489s，TTFS P90=0.594s，E2E P90=44.8s，SLA 全达标
+- 生成报告：`results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-phase2-20260324/REPORT.md`
+
+#### 2. RPS=0.4 单点探针（服务参数调整后重启）
+- 第一次启动 rps=0.519（20分钟）→ 用户暂停，调整服务参数
+- 第二次启动 rps=0.519 → 发现与之前进程冲突，用户手动 kill 并重启服务
+- 第三次启动 rps=0.4（PID 134905）→ 用户再次手动清理进程后服务重启
+- 第四次重新发起 rps=0.4（PID 128109）→ 完成，成功率 100%，E2E P90=107.2s ✅
+- 生成报告：`results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.400-20260327/REPORT.md`
+
+#### 3. RPS=0.43 单点探针
+- 以 0.43 req/s（516 请求，20 分钟）运行探针
+- 结果：成功率 100%，但 **E2E P90=182.1s，超过 SLA 阈值 180s（超出 1.1%）**，判定 ❌ 临界超标
+- 生成报告：`results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.430-20260327/REPORT.md`
+
+#### 4. SLA 边界定位完成
+- **ideal_rps = 0.40 req/s（24 RPM）** ——当前已验证最高 SLA 达标档位
+- 边界区间：`0.40 < ideal_rps < 0.43 req/s`
+- 更新 `results/README.md` 追加两条新实验索引
+
+---
+
+### 🐛 遇到的错误及解决
+
+| 错误 | 原因 | 解决方案 |
+|------|------|---------|
+| rps=0.4519 目录为空 | Phase 2 脚本在 Round 2 结束后通过 EXIT_TRAP 提前退出，0.4519 目录预创建但未执行 | 告知用户该测试点缺失，仅对 rps=0.3415 做分析 |
+| 进程残留导致多次重启测试 | `kill` 命令未完全杀死所有子进程，或用户在不同会话启动了测试 | 每次启动前用 `pgrep` 检查残留进程，确认清空后再启动 |
+| rps=0.43 E2E P90 超标 | RPS 超过服务容量临界点，队列开始积压，尾部延迟非线性增长 | 确认 ideal_rps=0.40 为上界，记录临界 FAIL 档位 |
+
+---
+
+### 📊 多档位测试汇总
+
+| RPS | 成功率 | TTFT P90 | TTFS P90 | E2E P90 | 判定 |
+|-----|--------|----------|----------|---------|------|
+| 0.5878（3-25，infra-opti）| 75.15% | 1.420s | 3.315s | 600.6s | ❌ 严重过载 |
+| 0.43（本次）| 100% | 0.761s | 1.192s | 182.1s | ❌ E2E 临界超标 |
+| **0.40（本次）** | **100%** | **0.680s** | **0.901s** | **107.2s** | **✅ ideal_rps** |
+| 0.3415（Phase2）| 100% | 0.489s | 0.594s | 44.8s | ✅ |
+
+---
+
+### 📁 本次修改文件
+
+| 文件 | 操作 |
+|------|------|
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-phase2-20260324/REPORT.md` | 新建 |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-phase2-20260324/*.png` | 新建（7张图） |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-phase2-20260324/*.html` | 新建 |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.400-20260327/REPORT.md` | 新建 |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.400-20260327/*.png` | 新建（7张图） |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.400-20260327/*.html` | 新建 |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.430-20260327/REPORT.md` | 新建 |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.430-20260327/*.png` | 新建（7张图） |
+| `results/guoxue-v2-eagle3/guoxue-v2-eagle3-4h20-probe-rps0.430-20260327/*.html` | 新建 |
+| `results/README.md` | 追加 2 条新实验索引 |
+
+---
+
+### ⏭️ 下次会话需关注（guoxue Eagle3）
+
+1. **决定是否补测 0.41~0.42**：当前边界 `0.40 < ideal_rps < 0.43`，若需精确化可在此区间补探一点
+2. **Phase 3 四点网格验证**：以 `IDEAL_RPS=0.40, PRODUCTION_RPS=0.23` 运行 Phase 3，脚本：`scripts/benchmark/run_phase3_grid_guoxue_eagle3_4h20.sh`
+3. **生成最终 EVAL_REPORT.md**：Phase 3 完成后运行 `model-eval-report` Skill
+
+---
+
+## 🗓️ 会话日志 — 2026-03-27（下午/晚间）
+
+### 主题：chart-deep-v5-2-235B 无限制环境重跑 Phase1+2 完成，报告分析 + 回放准备
+
+---
+
+### ✅ 实现了哪些功能
+
+#### 1. Phase 2 新跑完成（无 max-running-requests 限制）
+
+- Phase 2 三轮收敛：Round1(rps=1.4696 FAIL) → Round2(rps=1.4012 PASS) → Round3(rps=1.4350 PASS)
+- **ideal_rps = 1.4350 req/s（86.1 RPM）**，bracket 宽 2.41%（< 3% 收敛阈值）
+- 对比旧跑（受 128 限制）：ideal_rps 从 1.3360 → 1.4350，**提升 +7.4%**
+
+| 档位 | RPS | TTFS P90 | E2E P90 | SLA |
+|------|-----|---------|---------|-----|
+| Round 1 | 1.4696 | 1838ms ❌ | 147.3s | FAIL |
+| Round 2 | 1.4012 | 1438ms ✅ | 124.7s | PASS |
+| Round 3（ideal） | **1.4350** | **1492ms ✅** | **130.6s** | **PASS** |
+
+#### 2. Phase 3 启动（2026-03-27 22:46）
+
+- `IDEAL_RPS=1.4350 PRODUCTION_RPS=0.5`，4档：0.5000 / 0.8117 / 1.1233 / 1.4350 req/s
+- 每档 42min + 8.5min 冷却，预计约 3.2h（完成时间约 2026-03-28 02:06）
+- 日志：`logs/chart-deep-v5-2/phase3_run_20260327_2246.log`
+
+#### 3. Little's Law 计算（Phase 1 峰值档 con=311）
+
+- Phase 1 con=311：decode_throughput=1597.5 tok/s，mean_E2E=180.9s
+- **服务端承载并发 L = 1.5507 × 180.9 ≈ 280**
+
+#### 4. Phase 2+3 合并目录（8档容量曲线）
+
+- 合并新 Phase 2（3档无限制）+ 旧 Phase 2 低 RPS 有效档（5档，max_active < 128 未触发限制）
+- 路径：`logs/chart-deep-v5-2/chart-deep-v5-2-8h20-phase23_merged_20260327/`
+
+#### 5. 容量曲线图表生成
+
+- YAML 配置：`configs/models/chart-deep-v5-2-235B/8h20_peak_finder_analysis.yaml`
+- 输出：`results/chart-deep-v5-2-8h20-peak-finder-20260327/plot_latency_2d.html`（含8档SLA分析）
+- SLA 拐点：rps=1.4696 时 TTFS P90 超标（1838ms > 1500ms），FAIL 点由 TTFS 先于 E2E 触发
+
+#### 6. REPORT.md 生成（含完整 §0~§3 骨架）
+
+- 路径：`results/chart-deep-v5-2-8h20-peak-finder-20260327/REPORT.md`
+- 包含：三锚点表、Phase 1 各档吞吐、Phase 2 收敛过程、Phase 3 待填位（⏳ 占位）、上线建议
+
+#### 7. 归档与配置更新
+
+- `results/models/INDEX.yaml`：追加 chart-deep-v5-2-235B 条目（eval_status: in_progress）
+- `configs/models/chart-deep-v5-2-235B/8h20.env`：
+  - 更新 SERVER_URL → `172.21.65.249`
+  - 新增 `REPLAY_DATASET_PATH` / `REPLAY_RPM` / `GROUP_NAME` 参数
+
+#### 8. 回放测试方案就绪
+
+- 数据集：`datas/output_chart-deep-v5/chart_deep_v5-2_235B_poisson_100_stitched.csv`（1755条，31min）
+- 峰值 RPM=109，P90=91.6（超过单实例 ideal_rps=86.1 RPM，属压测场景）
+- 执行命令（Phase 3 完成后触发）：
+  ```bash
+  nohup bash scripts/benchmark/run_replay.sh \
+      configs/models/chart-deep-v5-2-235B/8h20.env \
+      > logs/data-pipeline/chart-deep-v5-2-8h20_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+  ```
+
+---
+
+### ❌ 遇到了哪些错误
+
+1. **`multi_exp_compare` 使用相对路径时找不到实验文件**
+   - 原因：工具从 `llm-benchmark` 目录运行，相对路径解析失败
+   - 修复：YAML 中 `dir` 和 `output_dir` 改为绝对路径
+
+---
+
+### ✅ 如何解决错误
+
+1. YAML 绝对路径修复：直接将 `/mnt/ai-infra/users/wnd/workspace/execute/guofan/...` 前缀写入 YAML 配置即可
+
+---
+
+### ⏭️ 下次会话需关注（chart-deep-v5-2）
+
+1. **Phase 3 完成后**（约 2026-03-28 02:06）：
+   - 追加 Phase 3 档位到合并目录：
+     ```bash
+     for d in logs/chart-deep-v5-2/chart-deep-v5-2-phase3_20260327_2246/qps*/; do
+         [ -d "$d" ] && cp -rl "$d" "logs/chart-deep-v5-2/chart-deep-v5-2-8h20-phase23_merged_20260327/$(basename $d)"
+     done
+     ```
+   - 重跑 `multi_exp_compare`（更新容量曲线图 + SLA 表）
+   - 填写 REPORT.md §3 Phase 3 section
+2. **回放测试**：Phase 3 完成后执行 `run_replay.sh`（~31min）
+3. **生成最终 EVAL_REPORT.md**：Phase 3 + 回放完成后，用 `model-eval-report` Skill 生成完整报告
+4. **确认业务峰值 RPM（Grafana）**：填入 REPORT.md 和 INDEX.yaml recommendation 字段

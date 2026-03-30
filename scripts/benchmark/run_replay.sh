@@ -2,8 +2,11 @@
 # 通用峰值流量回放脚本
 #
 # 用法：
-#   nohup bash scripts/benchmark/run_replay.sh <config.env> \
-#       > logs/data-pipeline/<model>_<tp>_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+#   nohup bash scripts/benchmark/run_replay.sh configs/models/<model>/<tp>.env &
+#
+#   脚本自动管理日志：
+#     pipeline 日志 → logs/data-pipeline/{GROUP_NAME}_replay_{TIMESTAMP}.log
+#     实验结果目录  → logs/{MODEL_NAME}/{GROUP_NAME}_replay_{TIMESTAMP}/
 #
 # 配置文件：configs/models/<model>/<tp>.env
 # 设计文档：clingo/docs/designs/2026-03-18-generic-benchmark-runner-design.md
@@ -60,10 +63,12 @@ done
 # ============================================================
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 EXP_NAME="${GROUP_NAME}_replay_${REPLAY_RPM}rpm"
-OUTPUT_DIR="${PROJECT_DIR}/logs/${GROUP_NAME}_replay_${TIMESTAMP}"
+MODEL_LOG_DIR="${PROJECT_DIR}/logs/${MODEL_NAME}"
+OUTPUT_DIR="${MODEL_LOG_DIR}/${GROUP_NAME}_replay_${TIMESTAMP}"
 LOG_FILE="${PROJECT_DIR}/logs/data-pipeline/${GROUP_NAME}_replay_${TIMESTAMP}.log"
 
 export PATH="${VENV_BIN}:${PATH}"
+mkdir -p "${MODEL_LOG_DIR}"
 mkdir -p "${OUTPUT_DIR}"
 mkdir -p "$(dirname "${LOG_FILE}")"
 

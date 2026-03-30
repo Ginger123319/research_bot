@@ -43,23 +43,25 @@ JSONL 实测 RPM: 16      ← 数据来源，真实形态
 
 ## 核心调用
 
-直接调 `benchmark` CLI，**不经 `example_llm_benchmark_test.sh` 包装**：
+**推荐方式**：通过 `run_replay.sh` 统一执行（见下方「新模式执行方式」），脚本自动处理日志和目录管理。
+
+**手动调用参考**（仅调试用）：
 
 ```bash
-VENV="/mnt/ai-infra/users/wnd/workspace/repo/SpecForge/.venv/bin"
-# MODEL_NAME = 算法提供的完整模型名，作为 logs/ 第一层子目录
-OUTDIR="logs/${MODEL_NAME}/${MODEL_NAME}_peak_replay_$(date +%Y%m%d_%H%M%S)"
+VENV="${PROJECT_DIR}/.venv/bin"
+# MODEL_NAME = .env 中的模型名，作为 logs/ 第一层子目录
+# GROUP_NAME = .env 中的部署组名，作为实验子目录前缀
+OUTDIR="logs/${MODEL_NAME}/${GROUP_NAME}_replay_$(date +%Y%m%d_%H%M%S)"
 
 "${VENV}/benchmark" \
-  --exp-name "${MODEL_NAME}_peak_replay_${TARGET_RPM}rpm" \
-  --dataset-path "datas/output/${DATASET_FILE}" \
+  --exp-name "${GROUP_NAME}_replay_${TARGET_RPM}rpm" \
+  --dataset-path "datas/output_<model>/${DATASET_FILE}" \
   --url "${SERVER_URL}" \
   --tokenizer "${TOKENIZER_PATH}" \
   --keep-income-time \
   --no-kvcache \
   --max-completion-tokens ${MAX_TOKENS} \
-  --output-dir "${OUTDIR}" \
-  2>&1 | tee "logs/data-pipeline/${MODEL_NAME}_replay_$(date +%Y%m%d_%H%M%S).log"
+  --output-dir "${OUTDIR}"
 ```
 
 **关键参数说明**：
@@ -77,10 +79,13 @@ OUTDIR="logs/${MODEL_NAME}/${MODEL_NAME}_peak_replay_$(date +%Y%m%d_%H%M%S)"
 ## 实验命名约定
 
 ```
-exp-name:   {MODEL_NAME}_peak_replay_{TARGET_RPM}rpm
-输出目录:   logs/{MODEL_NAME}_peak_replay_{TIMESTAMP}/
-日志文件:   logs/{MODEL_NAME}_replay_{TIMESTAMP}.log
+exp-name:    {GROUP_NAME}_replay_{TARGET_RPM}rpm
+实验结果目录: logs/{MODEL_NAME}/{GROUP_NAME}_replay_{TIMESTAMP}/
+pipeline日志: logs/data-pipeline/{GROUP_NAME}_replay_{TIMESTAMP}.log
 ```
+
+> `MODEL_NAME`（`.env` 中定义）= 模型级目录，对应 `logs/<model>/`；  
+> `GROUP_NAME`（`.env` 中定义）= 部署组，同一模型多组部署时区分（如 `8tp` vs `4tp`）。
 
 ---
 
@@ -107,15 +112,20 @@ poisson_100_stitched.csv（3036 条，~60min 时间窗口）→ 回放耗时 ~60
 
 运行期间查看进度：
 ```bash
-tail -f logs/{MODEL}_replay_<timestamp>.log
+tail -f logs/data-pipeline/{GROUP_NAME}_replay_<timestamp>.log
 ```
 
 ---
 
 ## 分析结果
 
+回放完成后，脚本会自动打印下一步命令，直接复制执行即可：
+
 ```bash
-analysis --host 0.0.0.0 --port 8050 --exp logs/{MODEL}_peak_replay_{TIMESTAMP}
+.venv/bin/python scripts/analysis/offline_analysis.py \
+  --csv logs/{MODEL_NAME}/{GROUP_NAME}_replay_{TIMESTAMP}/{EXP_NAME}.csv \
+  --out results/<report_dir>/{EXP_NAME}_analysis.html \
+  --model-name {MODEL_NAME}
 ```
 
 **成功判断标准**（同 QPS 扫描）：
@@ -151,7 +161,9 @@ analysis --host 0.0.0.0 --port 8050 --exp logs/{MODEL}_peak_replay_{TIMESTAMP}
 
 ---
 
-**参考实验**：`logs/ziwei_peak_replay_20260310_135418`（poisson_29）、`logs/ziwei_peak_replay_20260310_163524`（poisson_100，3036 条，~60min）
+**参考实验**：
+- `logs/chart-deep-v5-2/chart-deep-v5-2-8h20_replay_20260329_130526/`（poisson_100，新目录规范）
+- `logs/ziwei_peak_replay_20260310_163524`（poisson_100，旧规范，无模型子目录）
 
 ---
 
@@ -181,18 +193,18 @@ grep REPLAY configs/models/<model>/8tp.env
 **执行**：
 
 ```bash
-nohup bash scripts/benchmark/run_replay.sh \
-    configs/models/<model>/8tp.env \
-    > logs/data-pipeline/<model>_8tp_replay_$(date +%Y%m%d_%H%M%S).log 2>&1 &
+# 脚本自动管理日志路径，无需手动重定向
+nohup bash scripts/benchmark/run_replay.sh configs/models/<model>/8tp.env &
 
-# 查看进度
-tail -f logs/data-pipeline/<model>_8tp_replay_<timestamp>.log
+# 查看进度（GROUP_NAME 来自 .env，TIMESTAMP 在启动后打印于屏幕）
+tail -f logs/data-pipeline/<GROUP_NAME>_replay_<TIMESTAMP>.log
 ```
 
 通用脚本 `run_replay.sh` 自动：
 - 校验 `REPLAY_DATASET_PATH` / `REPLAY_RPM` 非空
-- 生成实验目录 README.md
-- 完成提示中输出下一步 `benchmark-result-analysis` 命令
+- 建立 `logs/{MODEL_NAME}/` 模型级目录
+- 在 `logs/{MODEL_NAME}/{GROUP_NAME}_replay_{TIMESTAMP}/` 写实验目录 README.md
+- 完成提示中输出下一步 `offline_analysis.py` 命令
 
 ---
 
@@ -200,7 +212,9 @@ tail -f logs/data-pipeline/<model>_8tp_replay_<timestamp>.log
 
 **触发时机**：回放实验完成（benchmark 工具打印结果统计）后，**在进行 benchmark-result-analysis 分析之前**，写入实验目录 README.md。
 
-**写入路径**：`logs/<model-full-name>/<exp_dir>/README.md`
+> `run_replay.sh` 已在启动时自动写入初始 README.md，回放完成后需补充结论部分（成功率 / P90 / 结果指针）。
+
+**写入路径**：`logs/{MODEL_NAME}/{GROUP_NAME}_replay_{TIMESTAMP}/README.md`
 
 **模板**：
 

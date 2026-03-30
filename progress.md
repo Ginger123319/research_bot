@@ -1776,6 +1776,42 @@ nohup bash scripts/benchmark/run_phase1_auto_chart_deep_8h20.sh \
 
 ---
 
+---
+
+## 2026-03-30 — xinghan-tarot-72b-agentv1 Demo 评估
+
+### Step 0~2.5 ✅ 信息收集 & 配置（2026-03-30）
+- 模型：xinghan-tarot-72b-agentv1（Pulsar 平台部署，演示实例）
+- 数据路径：/mnt/ai-infra/datasets/used4evaluation/xinghan-tarot-72b-agentv1
+- Tokenizer：/mnt/ai-llm/agent2-checkpoint-778
+- 端点：https://infer-test.geniuworks.com/demo-xinghan-tarot-p72b-agentv1-jyf/v1/chat/completions
+- 配置文件：configs/models/xinghan-tarot-72b-agentv1/demo.env
+
+### Step 3 ✅ 数据处理（2026-03-30）
+- 原始数据：by_day/ 已有 CSV（Steps 1&1.5 已完成）
+- 低谷峰值窗口：04:00~05:00（avg ~82 RPM，peak ~117 RPM），取 3 天拼接
+- 泊松插值目标：120 RPM，拼接产物：`datas/output_tarot/xinghan-tarot-72b-agentv1_selected_combined_3days_lowpeak_poisson_120_stitched.csv`
+- Demo 截取：前 20 分钟 → `datas/output_tarot/xinghan-tarot-72b-agentv1_demo20min.csv`（1903 条，avg 95 RPM，peak 120 RPM）
+
+### Step 4 ✅ 远端连通性验证（2026-03-30）
+- 端点 HTTP 200，smoke test 通过
+- 基线延迟：~2s（prompt ~1661 tokens，长系统提示）
+
+### Step 5 ✅ 回放测试完成（2026-03-30 17:33~17:53）
+- 数据集：xinghan-tarot-72b-agentv1_demo20min.csv（1903 条，20min，avg 95 RPM）
+- 实验目录：logs/xinghan-tarot-72b-agentv1/xinghan-tarot-72b-agentv1_replay_20260330_173333/
+- **成功率：100.00%（1903/1903）**，POST 异常：0，超时：0
+- **TTFT P90：0.26s**，TTFT P99：0.35s
+- **E2E P90：12.30s**（prompt avg 1701 tokens，completion avg 208 tokens）
+- 结论：✅ Demo 回放通过，服务质量优秀
+
+### ⚠️ 本次会话遇到的问题及修复
+- benchmark 工具未安装（.venv 重建丢失）：创建 `.venv/bin/benchmark` 包装脚本，通过 PYTHONPATH 指向 `third_party/llm-benchmark/src` 解决
+- run_replay.sh 输出目录规范不符（写在 logs/ 根下）：修复为 `logs/${MODEL_NAME}/${GROUP_NAME}_replay_${TIMESTAMP}/`；chart-deep 历史目录手动 mv 归位
+- llm-replay-benchmark SKILL.md 多处路径/工具名与实际脚本不符：已全面对齐
+
+---
+
 ### ⏭️ 下次会话需关注（chart-deep-v5-2）
 
 1. **Phase 3 完成后**（约 2026-03-28 02:06）：

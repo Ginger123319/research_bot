@@ -323,9 +323,15 @@ baseline_latency_s: <首次响应秒数>
 
 **前置检查（跳过条件）**：
 ```bash
-ls logs/<model-full-name>/<model>_*_replay_*/    # 回放结果已存在 → 跳过回放
-ls logs/<model-full-name>/<model>_*_qps_*_all/   # 合并 QPS 结果已存在 → 跳过扫描
+ls logs/<model-full-name>/<group-name>_replay_*/   # 回放结果已存在 → 跳过回放
+ls logs/<model-full-name>/<model>_*_qps_*_all/     # 合并 QPS 结果已存在 → 跳过扫描
 ```
+
+> **输出目录规范**：
+> - `run_replay.sh` 使用 `MODEL_NAME`（来自 `.env`）作为模型级目录，`GROUP_NAME` 作为实验子目录：  
+>   `logs/${MODEL_NAME}/${GROUP_NAME}_replay_${TIMESTAMP}/`  
+> - pipeline 日志（`nohup` 重定向）统一写入 `logs/data-pipeline/`。  
+> - 若 `MODEL_NAME` 与实际 `logs/<model>/` 目录名不同（历史遗留），手动 `mv` 到对应目录并与该目录命名对齐。
 
 **QPS 扫描路径选择（二选一）**：
 
@@ -379,7 +385,7 @@ nohup bash scripts/benchmark/run_<model>_qps_sweep.sh \
 → 扫描完成后更新为：
 ### Step 5 ✅ Benchmark 完成（YYYY-MM-DD）
 - 拐点 QPS：~<x> req/s（TTFS P90 ≤ 1.5s 基准）
-- 日志目录：logs/<model-full-name>/<model>_*_qps_*_all/ 或 logs/<model-full-name>/<model>-*-phase3_*/
+- 日志目录：logs/<model-full-name>/<group-name>_replay_*/ 或 logs/<model-full-name>/<model>-*-phase*/
 ```
 
 **model-context.md 追加**（回放完成后）：

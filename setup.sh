@@ -4,7 +4,8 @@
 #
 # 功能：
 #   1. 初始化 git submodules（llm-benchmark + data_analysis）
-#   2. 安装各 submodule 的 Python 依赖（via uv sync）
+#   2. 安装各 submodule 的 Python 依赖（via uv sync，失败时 fallback 到 pip --target）
+#   3. 确保 .venv 就绪：benchmark wrapper + 分析依赖（plotly / matplotlib 等）
 
 set -e
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,8 +50,13 @@ echo "  启动 Dashboard：.venv-serve/bin/python3 scripts/serve.py 18999 --dire
 echo ""
 echo "==> 安装 llm-benchmark 依赖（uv sync）..."
 if [ -f "$PROJECT_DIR/third_party/llm-benchmark/pyproject.toml" ]; then
-    cd "$PROJECT_DIR/third_party/llm-benchmark" && uv sync
-    echo "✓ llm-benchmark 依赖安装完成"
+    cd "$PROJECT_DIR/third_party/llm-benchmark"
+    if uv sync 2>/dev/null; then
+        echo "✓ llm-benchmark 依赖安装完成（uv sync）"
+    else
+        echo "⚠️  uv sync 失败（Python 缓存缺失），跳过；benchmark 将由 wrapper 脚本通过 PYTHONPATH 调用"
+    fi
+    cd "$PROJECT_DIR"
 else
     echo "⚠️  llm-benchmark 中未找到 pyproject.toml，跳过"
 fi
@@ -59,10 +65,75 @@ fi
 echo ""
 echo "==> 安装 data_analysis 依赖（uv sync）..."
 if [ -f "$PROJECT_DIR/third_party/data_analysis/pyproject.toml" ]; then
-    cd "$PROJECT_DIR/third_party/data_analysis" && uv sync
-    echo "✓ data_analysis 依赖安装完成"
+    cd "$PROJECT_DIR/third_party/data_analysis"
+    if uv sync 2>/dev/null; then
+        echo "✓ data_analysis 依赖安装完成（uv sync）"
+    else
+        echo "⚠️  uv sync 失败，跳过"
+    fi
+    cd "$PROJECT_DIR"
 else
     echo "⚠️  data_analysis 中未找到 pyproject.toml，跳过"
+fi
+
+# ── 确保 .venv 存在（benchmark + offline_analysis.py 使用）──
+echo ""
+echo "==> 检查 .venv..."
+VENV_BIN="$PROJECT_DIR/.venv/bin"
+VENV_PYTHON=""
+
+# 优先用已存在的 .venv，否则用 python3.10 或 python3 创建
+if [ -f "$VENV_BIN/python" ]; then
+    VENV_PYTHON="$VENV_BIN/python"
+    echo "✓ .venv 已存在（$(${VENV_PYTHON} --version 2>&1)）"
+else
+    for py in python3.10 python3 python; do
+        if command -v "$py" &>/dev/null; then
+            "$py" -m venv "$PROJECT_DIR/.venv" --without-pip 2>/dev/null \
+                || "$py" -m venv "$PROJECT_DIR/.venv"
+            VENV_PYTHON="$VENV_BIN/python"
+            echo "✓ .venv 已创建（$py）"
+            break
+        fi
+    done
+fi
+
+if [ -z "$VENV_PYTHON" ]; then
+    echo "⚠️  未找到可用 Python，跳过 .venv 初始化"
+else
+    VENV_SITE="$PROJECT_DIR/.venv/lib/$(basename $(ls -d $PROJECT_DIR/.venv/lib/python* 2>/dev/null | head -1))/site-packages"
+
+    # ── benchmark wrapper（llm-benchmark 通过 PYTHONPATH 调用）──
+    LLM_BENCH_SRC="$PROJECT_DIR/third_party/llm-benchmark/src"
+    if [ -f "$VENV_BIN/benchmark" ]; then
+        echo "✓ .venv/bin/benchmark 已存在，跳过"
+    elif [ -d "$LLM_BENCH_SRC" ]; then
+        cat > "$VENV_BIN/benchmark" << WRAPPER
+#!/bin/bash
+PYTHONPATH="${LLM_BENCH_SRC}:\${PYTHONPATH:-}" \\
+  exec "${VENV_BIN}/python" \\
+  -m llm_benchmark.benchmark.benchmark "\$@"
+WRAPPER
+        chmod +x "$VENV_BIN/benchmark"
+        echo "✓ .venv/bin/benchmark wrapper 已创建（PYTHONPATH → third_party/llm-benchmark/src）"
+    else
+        echo "⚠️  third_party/llm-benchmark/src 不存在，benchmark wrapper 未创建"
+    fi
+
+    # ── 安装分析依赖（plotly / matplotlib / pandas / numpy）──
+    # offline_analysis.py / compare_analysis.py 等需要这些包
+    if "$VENV_PYTHON" -c "import plotly, matplotlib" 2>/dev/null; then
+        echo "✓ 分析依赖（plotly / matplotlib）已安装，跳过"
+    else
+        echo "==> 安装分析依赖（plotly / matplotlib）..."
+        if [ -n "$VENV_SITE" ] && [ -d "$VENV_SITE" ]; then
+            pip install plotly matplotlib --target "$VENV_SITE" -q \
+                2>&1 | grep -v "^WARNING:" | grep -v "^$" || true
+            echo "✓ 分析依赖安装完成（pip --target $VENV_SITE）"
+        else
+            echo "⚠️  site-packages 路径未找到，跳过分析依赖安装"
+        fi
+    fi
 fi
 
 # ── 完成提示 ──────────────────────────────────────────

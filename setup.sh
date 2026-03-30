@@ -128,3 +128,47 @@ echo "   configs/analysis/ 下已有历史实验配置（dir/output_dir 为原�
 echo "   新建分析任务时，复制 template.yaml 并使用相对路径（logs/xxx, results/xxx）即可。"
 echo "   详细工作流见：configs/analysis/README.md"
 echo ""
+
+# ── 后台启动 Dashboard ─────────────────────────────────
+SERVE_PORT=18999
+SERVE_LOG="$PROJECT_DIR/logs/data-pipeline/serve_${SERVE_PORT}.log"
+SERVE_PID_FILE="$PROJECT_DIR/.serve.pid"
+
+# 检查是否已在运行（通过 PID 文件）
+if [ -f "$SERVE_PID_FILE" ]; then
+    OLD_PID=$(cat "$SERVE_PID_FILE")
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "ℹ️  Dashboard 已在运行（PID $OLD_PID，端口 $SERVE_PORT）"
+        echo "   停止：kill $OLD_PID"
+        echo "   日志：tail -f $SERVE_LOG"
+        echo ""
+        exit 0
+    fi
+    rm -f "$SERVE_PID_FILE"
+fi
+
+# 端口被其他进程占用时，自动替换
+if fuser "${SERVE_PORT}/tcp" &>/dev/null; then
+    echo "ℹ️  端口 $SERVE_PORT 被占用，正在替换旧进程..."
+    fuser -k "${SERVE_PORT}/tcp" 2>/dev/null
+    sleep 1
+fi
+
+mkdir -p "$(dirname "$SERVE_LOG")"
+nohup "$PROJECT_DIR/.venv-serve/bin/python3" "$PROJECT_DIR/scripts/serve.py" \
+    "$SERVE_PORT" --bind 0.0.0.0 --directory "$PROJECT_DIR/results" \
+    > "$SERVE_LOG" 2>&1 &
+SERVE_PID=$!
+echo "$SERVE_PID" > "$SERVE_PID_FILE"
+
+sleep 1
+if kill -0 "$SERVE_PID" 2>/dev/null; then
+    echo "🚀 Dashboard 已后台启动"
+    echo "   地址：http://$(hostname -I | awk '{print $1}'):$SERVE_PORT"
+    echo "   PID：$SERVE_PID  |  停止：kill $SERVE_PID"
+    echo "   日志：tail -f $SERVE_LOG"
+else
+    echo "⚠️  Dashboard 启动失败，查看日志："
+    echo "   tail -20 $SERVE_LOG"
+fi
+echo ""

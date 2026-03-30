@@ -38,3 +38,4 @@ tmp/
 *.iml
 third_party/speculative-decoding-benchmark
 .env.local
+.serve.pid

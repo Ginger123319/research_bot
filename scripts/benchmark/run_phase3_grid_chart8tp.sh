@@ -12,10 +12,10 @@
 
 set -uo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
-LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark"
+LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 
 # ── 模型参数 ────────────────────────────────────────────────
 SERVER_URL="https://infer.geniuworks.com/infra-xinghan-chart-p32b-v1-agent/v1/chat/completions"

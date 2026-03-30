@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 OUTPUT_BASE="${PROJECT_DIR}/logs/guoxue_phase2_20260318"
 CHECKPOINT="${OUTPUT_BASE}/phase2_checkpoint.md"

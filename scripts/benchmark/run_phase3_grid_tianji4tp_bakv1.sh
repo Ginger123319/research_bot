@@ -18,10 +18,10 @@ IDEAL_RPS="${IDEAL_RPS:?必须设置 IDEAL_RPS（来自 Phase 2 输出）}"
 # production_rps = 3584 RPM / 8实例 / 60 = 7.47 RPS/实例
 PRODUCTION_RPS="7.47"
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
-LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark"
+LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 
 # ── 模型参数 ────────────────────────────────────────────────
 SERVER_URL="https://infer.geniuworks.com/infra-tianji-querysafety-p4b-v23-bakv1/v1/chat/completions"

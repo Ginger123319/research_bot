@@ -16,7 +16,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PHASE3_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase3_grid_guoxue8tp_v2.sh"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"

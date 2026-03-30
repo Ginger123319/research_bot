@@ -11,7 +11,7 @@
 
 set -uo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # Phase 2 续跑日志（固定路径）
 PHASE2_LOG="${PROJECT_DIR}/logs/phase2_chart4tp_resume_20260319.log"

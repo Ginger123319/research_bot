@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PHASE1_LOG="${PROJECT_DIR}/logs/phase1_eagle3_4h20_console.log"
 PHASE2_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase2_auto_guoxue_eagle3_4h20.sh"
 RELAY_LOG="${PROJECT_DIR}/logs/relay_eagle3_4h20_$(date +%Y%m%d_%H%M).log"

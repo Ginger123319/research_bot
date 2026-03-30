@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
 SATURATE="${PROJECT_DIR}/scripts/benchmark/run_phase1_saturation.sh"

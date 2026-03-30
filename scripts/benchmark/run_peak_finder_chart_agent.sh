@@ -37,7 +37,7 @@ if [[ "${TP}" != "8tp" && "${TP}" != "4tp" ]]; then
     exit 1
 fi
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BENCH_DIR="${PROJECT_DIR}/scripts/benchmark"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 

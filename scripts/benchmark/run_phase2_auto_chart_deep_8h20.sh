@@ -10,13 +10,13 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
-LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
 
 # ── 模型参数 ────────────────────────────────────────────────────
-SERVER_URL="http://172.21.65.228:8080/v1/chat/completions"
+SERVER_URL="http://172.21.65.249:8080/v1/chat/completions"
 TARGET_MODEL="ignore-model-name"
 TOKENIZER="/mnt/ai-llm/chart/chart_deep/v5-2_235B_chart_deep"
 DATASET_PATH="${PROJECT_DIR}/datas/output_chart-deep-v5/combined_extracted.csv"

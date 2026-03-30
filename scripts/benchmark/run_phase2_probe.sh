@@ -49,8 +49,8 @@ COOLDOWN_SECS="${COOLDOWN_SECS:-0}"
 # ============================================================
 # 路径配置
 # ============================================================
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
-LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 
 # RPS 格式化为目录名（保留 4 位小数）

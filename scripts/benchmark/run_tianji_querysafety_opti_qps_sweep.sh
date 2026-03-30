@@ -20,8 +20,8 @@ set -euo pipefail
 # ============================================================
 # 路径配置
 # ============================================================
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
-BENCH_ROOT="/mnt/ai-infra/users/wnd/workspace/execute/speculative-decoding-benchmark"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+BENCH_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 BENCHMARK_SCRIPT="${BENCH_ROOT}/modao/src/scripts/example_llm_benchmark_test.sh"
 VENV_BIN="${PROJECT_DIR}/.venv/bin"
 

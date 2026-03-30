@@ -28,7 +28,7 @@ source "${CONFIG_ENV}"
 # ============================================================
 # 固定路径
 # ============================================================
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_BIN="${PROJECT_DIR}/.venv/bin"
 
 # 补全相对路径

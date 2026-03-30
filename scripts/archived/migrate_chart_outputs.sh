@@ -11,7 +11,7 @@
 set -euo pipefail
 
 TARGET_BASE="/mnt/ai-infra/datasets/used4evaluation"
-DATAS_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan/datas"
+DATAS_DIR="${PROJECT_DIR}/datas"
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 

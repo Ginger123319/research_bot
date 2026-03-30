@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 DATAS_DIR="${PROJECT_DIR}/datas"
 TARGET_BASE="/mnt/ai-infra/datasets/used4evaluation"
 

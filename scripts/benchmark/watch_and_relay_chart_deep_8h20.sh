@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 
 PHASE2_SCRIPT="${PROJECT_DIR}/scripts/benchmark/run_phase2_auto_chart_deep_8h20.sh"

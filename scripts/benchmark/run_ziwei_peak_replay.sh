@@ -19,7 +19,7 @@ set -euo pipefail
 # ============================================================
 # 配置（按需修改）
 # ============================================================
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 VENV_BIN="${PROJECT_DIR}/.venv/bin"
 
 TOKENIZER="/mnt/ai-llm/xinghan-ziwei-32b-v1"

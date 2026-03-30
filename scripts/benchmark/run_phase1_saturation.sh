@@ -59,8 +59,8 @@ AVG_OUTPUT_LEN="${AVG_OUTPUT_LEN:?必须设置 AVG_OUTPUT_LEN（Phase 0 统计�
 # ============================================================
 # 路径配置
 # ============================================================
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
-LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/speculative-decoding-benchmark/3rdparty/llm-benchmark"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+LLM_BENCHMARK_ROOT="${PROJECT_DIR}/third_party/llm-benchmark"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 
 LEVEL_DIR="${OUTPUT_BASE_DIR}/con${CONCURRENCY}"

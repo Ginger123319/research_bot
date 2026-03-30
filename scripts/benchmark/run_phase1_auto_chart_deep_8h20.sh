@@ -13,20 +13,20 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PYTHON="${PROJECT_DIR}/.venv/bin/python3"
 ANALYZE="${PROJECT_DIR}/scripts/analysis/analyze_peak_finder.py"
 SATURATE="${PROJECT_DIR}/scripts/benchmark/run_phase1_saturation.sh"
 
 # ── 模型参数 ────────────────────────────────────────────────────
-SERVER_URL="http://172.21.65.228:8080/v1/chat/completions"
+SERVER_URL="http://172.21.65.249:8080/v1/chat/completions"
 TARGET_MODEL="ignore-model-name"
 TOKENIZER="/mnt/ai-llm/chart/chart_deep/v5-2_235B_chart_deep"
 DATASET_PATH="${PROJECT_DIR}/datas/output_chart-deep-v5/combined_extracted.csv"
 MAX_COMPLETION_TOKENS=4096
 AVG_OUTPUT_LEN=1006      # Phase 0 实测值（old_response tokenize 均值）
 EST_E2E=58.8             # 低负载实测 E2E 均值（秒），用于 NUM_REQUESTS 精确推算
-TIME_LIMIT_SECS=2520     # max(300, int(1006×2.5))=2515 → 2520s ≈ 42min/档
+TIME_LIMIT_SECS=1200     # max(300, int(1006×2.5))=2515 → 2520s ≈ 42min/档
 COOLDOWN_SECS=510        # max(60, int(1006/2))=503 → 510s ≈ 8.5min
 
 # ── 初始并发 ────────────────────────────────────────────────────
@@ -52,7 +52,8 @@ echo "  ⚠️  注意：每档约 $(( TIME_LIMIT_SECS/60 ))min + $(( COOLDOWN_S
 echo "========================================================"
 
 CURRENT_CON="${INIT_CON}"
-PREV_DIR=""
+# 若从 con=180 续跑，以旧服务 con=120 结果作为增幅基准（旧数据干净，120 < 128 限制）
+PREV_DIR="${PREV_DIR:-}"
 MAX_ITERS=12   # 最多 12 档（每档 ~50min，总时长上限 ~10h）
 
 for iter in $(seq 1 ${MAX_ITERS}); do
@@ -75,7 +76,6 @@ for iter in $(seq 1 ${MAX_ITERS}); do
         MAX_COMPLETION_TOKENS="${MAX_COMPLETION_TOKENS}" \
         TIME_LIMIT_SECS="${TIME_LIMIT_SECS}" \
         AVG_OUTPUT_LEN="${AVG_OUTPUT_LEN}" \
-        MAX_REQUESTS=5621 \
         bash "${SATURATE}"
     else
         echo "  ℹ️  con=${CURRENT_CON} 已有结果，跳过执行直接分析"
@@ -122,7 +122,8 @@ for iter in $(seq 1 ${MAX_ITERS}); do
             echo "⏳ 冷却 ${COOLDOWN_SECS}s 后自动启动 Phase 2..."
             sleep "${COOLDOWN_SECS}"
             START_RPS=$(${PYTHON} -c "print(f'{float(\"${MAX_RPS}\") * 1.2:.4f}')")
-            PEAK_RPS="${MAX_RPS}" START_RPS="${START_RPS}" \
+            # INIT_LO 从环境变量透传（如旧服务的已知 PASS 值），不传 INIT_HI（旧失败原因是限制而非真实瓶颈）
+            PEAK_RPS="${MAX_RPS}" START_RPS="${START_RPS}" INIT_LO="${INIT_LO:-}" \
                 bash "${PROJECT_DIR}/scripts/benchmark/run_phase2_auto_chart_deep_8h20.sh"
         fi
         break

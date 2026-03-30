@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/mnt/ai-infra/users/wnd/workspace/execute/guofan"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 PHASE2_DIR="${PHASE2_DIR:-}"
 if [[ -z "${PHASE2_DIR}" ]]; then

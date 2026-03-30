@@ -16,8 +16,8 @@ dist/
 build/
 .eggs/
 
-# 分析结果目录（按需手动 git add 选择性提交）
-results/
+# 分析结果目录（软链指向共享 NFS，不纳入版本控制）
+results
 
 # 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
 # results/**/*.html

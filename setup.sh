@@ -76,20 +76,34 @@ else
     echo "   如需访问历史 benchmark 数据，请联系项目负责人获取路径并手动 ln -sfn"
 fi
 
-# results/ → 本地目录（可通过 .env.local 覆盖为共享路径）
-if [ -f "$PROJECT_DIR/.env.local" ]; then
-    # shellcheck source=/dev/null
-    source "$PROJECT_DIR/.env.local"
-fi
-RESULTS_DIR="${RESULTS_DIR:-$PROJECT_DIR/results}"
-if [ "$RESULTS_DIR" != "$PROJECT_DIR/results" ]; then
-    mkdir -p "$RESULTS_DIR"
-    ln -sfn "$RESULTS_DIR" "$PROJECT_DIR/results"
-    echo "✓ results/ → $RESULTS_DIR （来自 .env.local）"
+# results/ → 本地工作目录（个人实验结果）
+# 共享历史结果通过 SHARED_RESULTS_DIR 让 serve.py 读取，不影响本地 results/
+SHARED_RESULTS_TARGET="/mnt/ai-infra/users/shared/benchmark-results/guofan/results"
+
+if [ ! -d "$PROJECT_DIR/results" ] && [ ! -L "$PROJECT_DIR/results" ]; then
+    mkdir -p "$PROJECT_DIR/results/models"
+    echo "✓ results/ → 本地工作目录（已创建）"
 else
-    mkdir -p "$PROJECT_DIR/results"
-    echo "✓ results/ → 本地目录"
-    echo "  （如需指向共享路径，复制 .env.local.example → .env.local 并配置 RESULTS_DIR）"
+    echo "✓ results/ 已存在，跳过"
+fi
+
+# 检测共享结果目录：若存在且本地 results/ 不是指向它的软链，
+# 则自动配置 SHARED_RESULTS_DIR，让 serve.py Dashboard 展示共享历史
+if [ -d "$SHARED_RESULTS_TARGET" ]; then
+    LOCAL_REAL=$(realpath "$PROJECT_DIR/results" 2>/dev/null || echo "")
+    SHARED_REAL=$(realpath "$SHARED_RESULTS_TARGET" 2>/dev/null || echo "")
+    if [ "$LOCAL_REAL" != "$SHARED_REAL" ]; then
+        ENV_LOCAL="$PROJECT_DIR/.env.local"
+        if ! grep -q "SHARED_RESULTS_DIR" "$ENV_LOCAL" 2>/dev/null; then
+            echo "SHARED_RESULTS_DIR=$SHARED_RESULTS_TARGET" >> "$ENV_LOCAL"
+            echo "✓ 检测到共享 results → 已写入 .env.local (SHARED_RESULTS_DIR)"
+            echo "  serve.py Dashboard 将同时展示共享历史结果和你的本地结果"
+        else
+            echo "✓ SHARED_RESULTS_DIR 已在 .env.local 中配置"
+        fi
+    else
+        echo "✓ results/ 已指向共享目录，serve.py 直接读取"
+    fi
 fi
 
 echo ""

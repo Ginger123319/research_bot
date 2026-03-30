@@ -35,6 +35,19 @@ except ImportError:
 
 _md = MarkdownIt().enable("table")
 
+# Project root is the parent of the scripts/ directory (where this file lives)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Auto-load .env.local from project root (sets SHARED_RESULTS_DIR etc.)
+_ENV_LOCAL = os.path.join(_PROJECT_ROOT, ".env.local")
+if os.path.isfile(_ENV_LOCAL):
+    with open(_ENV_LOCAL) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _k, _v = _line.split("=", 1)
+                os.environ.setdefault(_k.strip(), _v.strip())
+
 _PERFORMANCE_KEYS = [
     "sla_max_qps_rps", "sla_max_qps_rpm", "replay_success_rate",
     "replay_ttft_p90_s", "replay_e2e_p90_s",
@@ -50,6 +63,12 @@ _VM_BASE = os.environ.get(
 )
 # Both metric name formats used by different SGLang versions
 _SGLANG_METRICS = ["sglang_num_requests_total", "sglang:num_requests_total"]
+
+# Shared results directory (set via SHARED_RESULTS_DIR env var or .env.local)
+# When set, serve.py merges shared INDEX.yaml into the Dashboard as read-only reference.
+# On the original dev machine: results/ IS the shared dir (symlink), leave this unset.
+# On a fresh clone: setup.sh writes SHARED_RESULTS_DIR to .env.local automatically.
+_SHARED_RESULTS_DIR = os.environ.get("SHARED_RESULTS_DIR", "")
 
 
 def _vm_instant(promql):
@@ -383,6 +402,12 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/online-rpm":
             self._serve_api_online_rpm()
             return
+        if path in ("/canvas", "/canvas/"):
+            self._serve_canvas_list()
+            return
+        if path.startswith("/shared/"):
+            self._serve_shared_file(path[len("/shared/"):])
+            return
         if path.startswith("/api/models/"):
             raw_name = path[len("/api/models/"):]
             name = urllib.parse.unquote(raw_name.rstrip("/"))
@@ -402,21 +427,58 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 
     # ── INDEX.yaml helpers ──────────────────────────────────────────────────
 
-    def _load_index(self):
-        """Return (data, None) on success or (None, error_str) on failure."""
-        index_path = os.path.join(self.directory, "models", "INDEX.yaml")
+    @staticmethod
+    def _read_one_index(index_path, source_tag):
+        """Read a single INDEX.yaml. Returns (models_list, base_data, error_str)."""
         try:
             with open(index_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             if not data or "models" not in data:
-                return None, "INDEX.yaml is empty or missing 'models' key"
-            return data, None
+                return [], data or {}, None
+            models = []
+            for m in data.get("models", []):
+                m = dict(m)
+                m["_source"] = source_tag
+                models.append(m)
+            return models, data, None
         except FileNotFoundError:
-            return None, f"INDEX.yaml not found at {index_path}"
+            return [], {}, None
         except yaml.YAMLError as e:
-            return None, f"YAML parse error: {e}"
+            return [], {}, f"YAML parse error in {index_path}: {e}"
         except Exception as e:
-            return None, str(e)
+            return [], {}, str(e)
+
+    def _load_index(self):
+        """Return (data, None) on success or (None, error_str) on failure.
+
+        Merges local INDEX.yaml (source='local') and shared INDEX.yaml
+        (source='shared') when SHARED_RESULTS_DIR is configured.
+        Local models take precedence for duplicate model_name entries.
+        On the original dev machine (results/ symlinks to shared), leave
+        SHARED_RESULTS_DIR unset — no merging needed.
+        """
+        local_path = os.path.join(self.directory, "models", "INDEX.yaml")
+        local_models, local_data, local_err = self._read_one_index(local_path, "local")
+
+        shared_models = []
+        if _SHARED_RESULTS_DIR:
+            # Skip if shared path resolves to the same real path as local directory
+            local_real = os.path.realpath(self.directory)
+            shared_real = os.path.realpath(_SHARED_RESULTS_DIR)
+            if local_real != shared_real:
+                shared_path = os.path.join(_SHARED_RESULTS_DIR, "models", "INDEX.yaml")
+                shared_models, _, _ = self._read_one_index(shared_path, "shared")
+
+        local_names = {m.get("model_name") for m in local_models}
+        merged = local_models + [m for m in shared_models if m.get("model_name") not in local_names]
+
+        if not merged:
+            msg = local_err or f"INDEX.yaml not found at {local_path}"
+            return None, msg
+
+        result = local_data or {}
+        result["models"] = merged
+        return result, None
 
     def _get_index_mtime(self):
         """Return INDEX.yaml mtime as CST ISO string, or None on error."""
@@ -568,6 +630,50 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
             "daily": daily,
         })
 
+    # ── Canvas list ─────────────────────────────────────────────────────────
+
+    def _serve_canvas_list(self):
+        canvas_dir = os.path.join(_PROJECT_ROOT, "docs", "canvas")
+        entries = []
+        if os.path.isdir(canvas_dir):
+            for fname in sorted(os.listdir(canvas_dir)):
+                if fname.lower().endswith(".html"):
+                    title = fname[:-5].replace("-", " ").replace("_", " ")
+                    entries.append((title, fname))
+
+        if entries:
+            cards_html = "\n".join(
+                f'<div class="model-card" style="max-width:400px">'
+                f'<div class="card-title">{_html_escape(title)}</div>'
+                f'<div class="card-actions">'
+                f'<a class="btn btn-primary" href="/docs/canvas/{_html_escape(fname)}" target="_blank">打开</a>'
+                f'</div></div>'
+                for title, fname in entries
+            )
+            body = f'<div class="model-grid">{cards_html}</div>'
+        else:
+            body = '<p style="color:#57606a">暂无 Canvas 文件（放入 <code>docs/canvas/*.html</code> 即可自动显示）</p>'
+
+        page = f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canvas 报告 — guofan</title>
+  <style>{_CSS}</style>
+</head>
+<body>
+<div class="dash-wrap">
+  <div class="dash-header">
+    <h1>📄 Canvas 报告</h1>
+    <a href="/">← 返回 Dashboard</a>
+  </div>
+  {body}
+</div>
+</body>
+</html>"""
+        self._send_html(page)
+
     # ── Dashboard ───────────────────────────────────────────────────────────
 
     def _get_server_host(self):
@@ -585,11 +691,44 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
             pass
         return self.headers.get("Host", "localhost").split(":")[0]
 
-    def _exp_link(self, exp_path):
-        """Build a clickable URL for a linked_experiments entry."""
+    def _serve_shared_file(self, rel_path):
+        """Serve a file from _SHARED_RESULTS_DIR under the /shared/ route."""
+        if not _SHARED_RESULTS_DIR:
+            self._send_json({"error": "SHARED_RESULTS_DIR not configured"}, status=404)
+            return
+        file_path = os.path.normpath(os.path.join(_SHARED_RESULTS_DIR, rel_path))
+        real_shared = os.path.realpath(_SHARED_RESULTS_DIR)
+        if not os.path.realpath(file_path).startswith(real_shared):
+            self._send_json({"error": "forbidden"}, status=403)
+            return
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+            ctype = self.guess_type(file_path)
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(content)))
+            self.end_headers()
+            self.wfile.write(content)
+        except FileNotFoundError:
+            self.send_error(404, "File not found")
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def _exp_link(self, exp_path, source="local"):
+        """Build a clickable URL for a linked_experiments entry.
+
+        For shared models, links point to /shared/<rel> so files are served
+        from _SHARED_RESULTS_DIR instead of the local (potentially empty) results/.
+        """
         host = self._get_server_host()
         if exp_path.startswith("results/"):
             rel = exp_path[len("results/"):]
+            if source == "shared" and _SHARED_RESULTS_DIR:
+                report_full = os.path.join(_SHARED_RESULTS_DIR, rel, "REPORT.md")
+                if os.path.exists(report_full):
+                    return f"/shared/{rel}/REPORT.md"
+                return f"/shared/{rel}/"
             report_full = os.path.join(self.directory, rel, "REPORT.md")
             if os.path.exists(report_full):
                 return f"/{rel}/REPORT.md"
@@ -618,6 +757,15 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         online_capacity_rpm = model.get("online_capacity_rpm") or 0
         completed_date = model.get("eval_completed_date") or ""
         file_warning = model.get("_file_warning", "")
+        source = model.get("_source", "")
+
+        # Source badge (shared vs local)
+        if source == "shared":
+            source_badge = '<span style="font-size:11px;color:#0969da;background:#ddf4ff;padding:1px 7px;border-radius:10px;margin-left:8px;vertical-align:middle">共享</span>'
+        elif source == "local":
+            source_badge = '<span style="font-size:11px;color:#6e7781;background:#f6f8fa;padding:1px 7px;border-radius:10px;margin-left:8px;vertical-align:middle">本地</span>'
+        else:
+            source_badge = ""
 
         # Status badge
         if status == "completed":
@@ -634,7 +782,8 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         eval_report_path = (model.get("paths") or {}).get("eval_report")
         if status == "completed" and eval_report_path:
             rel = eval_report_path[len("results/"):] if eval_report_path.startswith("results/") else eval_report_path
-            actions_html += f'<a class="btn btn-primary" href="/{rel}">查看报告</a>'
+            href = f"/shared/{rel}" if source == "shared" and _SHARED_RESULTS_DIR else f"/{rel}"
+            actions_html += f'<a class="btn btn-primary" href="{href}">查看报告</a>'
 
         # For in_progress: find first logs/ experiment for progress link
         if status == "in_progress":
@@ -649,7 +798,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
         exp_items = ""
         for exp in (model.get("linked_experiments") or []):
             label = exp.replace("results/", "").replace("logs/", "📋 ")
-            link = self._exp_link(exp)
+            link = self._exp_link(exp, source=source)
             exp_items += f'<div><a href="{_html_escape(link)}" target="_blank">{_html_escape(label)}</a></div>'
 
         warn_html = f'<p class="warn-text">{_html_escape(file_warning)}</p>' if file_warning else ""
@@ -706,7 +855,7 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 
         return f"""
 <div class="model-card"{card_data_attrs}>
-  <div class="card-title">{name}</div>
+  <div class="card-title">{name}{source_badge}</div>
   <div class="card-status">{status_html}</div>
   <div class="card-meta">
     <span>类型：{model_type}</span>
@@ -762,7 +911,13 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
                 rp = (model.get("paths") or {}).get("eval_report")
                 if rp and rp.startswith("results/"):
                     rel = rp[len("results/"):]
-                    if not os.path.exists(os.path.join(self.directory, rel)):
+                    local_ok = os.path.exists(os.path.join(self.directory, rel))
+                    shared_ok = (
+                        model.get("_source") == "shared"
+                        and _SHARED_RESULTS_DIR
+                        and os.path.exists(os.path.join(_SHARED_RESULTS_DIR, rel))
+                    )
+                    if not local_ok and not shared_ok:
                         model["_file_warning"] = f"⚠️ {rp} 不存在，报告链接不可用"
 
         # Summary stats
@@ -805,7 +960,10 @@ class MarkdownHandler(http.server.SimpleHTTPRequestHandler):
 <div class="dash-wrap">
   <div class="dash-header">
     <h1>🐈 guofan 模型评估平台</h1>
-    <a href="javascript:location.reload()">⟳ 刷新</a>
+    <div style="display:flex;gap:16px;align-items:center">
+      <a href="/canvas">📄 Canvas 报告</a>
+      <a href="javascript:location.reload()">⟳ 刷新</a>
+    </div>
   </div>
   {stats_html}
   <div class="model-grid">

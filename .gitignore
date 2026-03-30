@@ -1,5 +1,5 @@
 # 大型数据目录（不纳入版本控制）
-logs/
+logs
 
 # Node.js
 node_modules/

@@ -2,14 +2,21 @@
 # multi_exp_compare.py 外部 YAML 配置模版
 # =============================================================================
 #
-# 用法：
-#   cd .../llm-benchmark
-#   .venv/bin/python3 -m llm_benchmark.analysis.analysis.multi_exp_compare \
-#       --config configs/your_exp.yaml
+# 完整工作流说明见：configs/analysis/README.md
 #
-# 命名规范：configs/<model>_<deploy>_<date>.yaml
-#   例：configs/tianji_4tp_20260311.yaml
-#       configs/ziwei_tp8_vs_tp4_20260310.yaml
+# 用法（从项目根目录执行）：
+#   source third_party/llm-benchmark/.venv/bin/activate
+#   python3 -m llm_benchmark.analysis.analysis.multi_exp_compare \
+#       --config configs/analysis/your_exp.yaml
+#
+# 命名规范：configs/analysis/<model>_<deploy>_<date>.yaml
+#   例：tianji_4tp_20260311.yaml
+#       ziwei_tp8_vs_tp4_20260310.yaml
+#
+# 路径说明：
+#   dir / output_dir 支持相对路径（相对于运行命令时的当前目录）。
+#   推荐从项目根目录运行，直接写 logs/xxx 和 results/xxx 即可，无需绝对路径。
+#   项目根目录下 logs/ 是共享 benchmark 结果（NFS），results/ 是本地分析输出目录。
 #
 # =============================================================================
 
@@ -17,24 +24,27 @@
 # -----------------------------------------------------------------------------
 # [必填] 实验分组
 #
-# 单组：找拐点（单一部署配置）
-# 多组：对比不同部署方案（如 TP8 vs TP4，tp vs dp）
+# 单组：找拐点（单一部署配置的 QPS 扫描）
+# 多组：对比不同部署方案（如 TP8 vs TP4，TP vs DP）
+#
+# dir：benchmark 脚本输出的日志目录（logs/<exp_dir_name>/）
+#       每次 QPS 扫描会在此目录下生成多个 *.csv 文件，每个文件对应一个 QPS 档位
 # -----------------------------------------------------------------------------
 groups:
-  - label: "组名（图例显示，建议含模型+配置，如 ziwei-32b TP8）"
-    dir: "/绝对路径/到/logs/exp_dir"
+  - label: "模型名 部署配置（图例显示，如 ziwei-32b TP8）"
+    dir: "logs/your_exp_dir"
     # file_pattern: "*data600*"   # [可选] 文件名过滤，仅含该字符串的 CSV 参与分析
     #                             # 用于同目录下有多组数据时区分，不填则匹配所有 *.csv
 
-  # 多组示例（取消注释）：
+  # 多组对比示例（取消注释）：
   # - label: "TP4"
-  #   dir: "/path/to/logs/4tp_exp"
+  #   dir: "logs/your_4tp_exp_dir"
 
 
 # -----------------------------------------------------------------------------
 # [必填] X 轴维度
 #
-# request_rate    : 以请求速率（QPS）为 X 轴  ← 常用，QPS 拐点扫描
+# request_rate    : 以请求速率（RPS）为 X 轴  ← 最常用，QPS 拐点扫描
 # max_concurrency : 以最大并发数为 X 轴        ← 并发扫描实验时使用
 # -----------------------------------------------------------------------------
 x_key: request_rate
@@ -43,10 +53,12 @@ x_key: request_rate
 # -----------------------------------------------------------------------------
 # [必填] 输出目录
 #
-# 规范：results/<model>_<deploy>_<date>
-# 目录不存在时自动创建；HTML + REPORT.md 均放入此目录
+# 推荐写法（相对路径，从项目根目录运行时有效）：
+#   results/<model>_<deploy>_<date>
+#
+# 目录不存在时自动创建；生成的 HTML 图表 + REPORT.md 均放入此目录
 # -----------------------------------------------------------------------------
-output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/model_deploy_date"
+output_dir: "results/model_deploy_date"
 
 
 # -----------------------------------------------------------------------------

@@ -54,6 +54,44 @@ else
 fi
 
 # ── 完成提示 ──────────────────────────────────────────
+# ── 关联数据目录 ──────────────────────────────────────
+
+# datas/ 已通过 git 追踪（全是指向 /mnt/ai-infra/datasets/used4evaluation/ 的软链）
+# 只需确认挂载点存在即可
+if [ ! -d "/mnt/ai-infra/datasets/used4evaluation" ]; then
+    echo "⚠️  数据集挂载点不存在：/mnt/ai-infra/datasets/used4evaluation"
+    echo "   请确认 /mnt/ai-infra NFS 已挂载，否则 datas/ 下的软链将无法访问"
+fi
+
+# logs/ → 共享 benchmark 产物目录
+LOGS_TARGET="/mnt/ai-infra/users/shared/benchmark-results/guofan/logs"
+if [ -d "$LOGS_TARGET" ]; then
+    ln -sfn "$LOGS_TARGET" "$PROJECT_DIR/logs"
+    echo "✓ logs/ → $LOGS_TARGET"
+elif [ -L "$PROJECT_DIR/logs" ] || [ -d "$PROJECT_DIR/logs" ]; then
+    echo "✓ logs/ 已存在，跳过"
+else
+    mkdir -p "$PROJECT_DIR/logs"
+    echo "⚠️  共享 logs 目录不存在（$LOGS_TARGET），已创建本地 logs/"
+    echo "   如需访问历史 benchmark 数据，请联系项目负责人获取路径并手动 ln -sfn"
+fi
+
+# results/ → 本地目录（可通过 .env.local 覆盖为共享路径）
+if [ -f "$PROJECT_DIR/.env.local" ]; then
+    # shellcheck source=/dev/null
+    source "$PROJECT_DIR/.env.local"
+fi
+RESULTS_DIR="${RESULTS_DIR:-$PROJECT_DIR/results}"
+if [ "$RESULTS_DIR" != "$PROJECT_DIR/results" ]; then
+    mkdir -p "$RESULTS_DIR"
+    ln -sfn "$RESULTS_DIR" "$PROJECT_DIR/results"
+    echo "✓ results/ → $RESULTS_DIR （来自 .env.local）"
+else
+    mkdir -p "$PROJECT_DIR/results"
+    echo "✓ results/ → 本地目录"
+    echo "  （如需指向共享路径，复制 .env.local.example → .env.local 并配置 RESULTS_DIR）"
+fi
+
 echo ""
 echo "=================================================="
 echo "  ✅ 初始化完成！"

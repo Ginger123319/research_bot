@@ -1,6 +1,5 @@
 # 大型数据目录（不纳入版本控制）
 logs/
-datas/
 
 # Node.js
 node_modules/
@@ -37,3 +36,4 @@ tmp/
 .idea/
 *.iml
 third_party/speculative-decoding-benchmark
+.env.local

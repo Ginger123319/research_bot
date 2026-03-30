@@ -6,6 +6,40 @@
 
 ---
 
+## 快速开始
+
+### 1. 克隆仓库（含子模块）
+
+```bash
+git clone --recurse-submodules git@git.xxwolo.com:ai-infra-any/guofan.git guofan
+cd guofan
+```
+
+> 如果已经 clone 但未带 `--recurse-submodules`，运行 `bash setup.sh` 会自动补全。
+
+### 2. 初始化依赖
+
+```bash
+bash setup.sh
+```
+
+脚本会自动完成：
+- `git submodule update --init`（初始化 `llm-benchmark` 和 `data_analysis`）
+- `uv sync`（安装各子模块的 Python 依赖）
+
+前置要求：已安装 [`uv`](https://docs.astral.sh/uv/getting-started/installation/)（`curl -LsSf https://astral.sh/uv/install.sh | sh`）
+
+### 3. 配置实验参数（可选）
+
+如需运行 QPS sweep 对比分析，参考 `configs/analysis/template.yaml` 创建你自己的配置文件：
+
+```bash
+cp configs/analysis/template.yaml configs/analysis/my_experiment.yaml
+# 编辑 my_experiment.yaml，填入你的 dir / output_dir
+```
+
+---
+
 ## 项目动机
 
 随着业务规模的持续扩张，现有的模型部署服务在可维护性、资源利用率以及推理框架的统一性上均面临瓶颈。为此，我们启动「过番」迁移专项，目标是将所有在线推理服务系统性地迁移至基于 **SGLang** 的裸模型部署方案，在新的基础设施平台上完成稳定运营。

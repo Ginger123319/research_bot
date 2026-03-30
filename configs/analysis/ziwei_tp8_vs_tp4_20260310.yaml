@@ -1,0 +1,20 @@
+# ziwei-32b | TP8 vs TP4 对比 | 2026-03-10
+#
+# ⚠️ 注意：dir / output_dir 为个人环境路径，这是正常现象。
+# 克隆后请参考 template.yaml 新建适合你本地环境的配置文件，不要直接修改此文件。
+#
+# 实验背景：
+#   - 对比同一模型在不同张量并行度下的承载能力差异
+#   - 使用通用 SLA 基准（不覆盖 sla 配置）
+
+groups:
+  - label: "ziwei-32b TP8"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/ziwei_8tp_qps_20260310_all"
+  - label: "ziwei-32b TP4"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/ziwei_4tp_qps_20260310_all"
+
+x_key: request_rate
+
+output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/ziwei_tp_compare_20260310"
+
+# sla: 不填，使用通用默认值（ttfs_p90: 1.5s, e2e_p90: 150s, success_rate: 99%）

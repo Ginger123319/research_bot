@@ -1,0 +1,23 @@
+# tianji-querysafety-4b-v2-3 | 4TP 单实例 | 2026-03-11
+#
+# ⚠️ 注意：dir / output_dir 为个人环境路径，这是正常现象。
+# 克隆后请参考 template.yaml 新建适合你本地环境的配置文件，不要直接修改此文件。
+#
+# 实验背景：
+#   - 安全检测模型，System Prompt ~8K Token（固定模版 + few-shot）
+#   - User Input 极短（几十 Token），结构化 JSON 输出（max 256 tokens）
+#   - SGLang 前缀缓存命中率极高，整体呈"快进快出"模式
+#   - SLA 将 E2E P90 从通用 150s 收紧至 400ms 作为主判断指标
+
+groups:
+  - label: "tianji-querysafety-4b-v2-3 (4TP)"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/tianji_qps_20260311_200338"
+
+x_key: request_rate
+
+output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/tianji_querysafety_4tp_qps_20260311"
+
+sla:
+  ttfs_p90: 1.5
+  e2e_p90: 0.4        # 400ms：基于快进快出结构调整，取代通用 150s
+  success_rate: 0.99

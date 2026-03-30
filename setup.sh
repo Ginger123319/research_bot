@@ -33,6 +33,18 @@ echo "==> 初始化 git submodules..."
 git -C "$PROJECT_DIR" submodule update --init --recursive
 echo "✓ submodules 就绪"
 
+# ── 安装项目根依赖（serve.py 用：markdown-it-py, pyyaml）──
+# 使用独立 .venv-serve，避免与 .venv（可能是共享 SpecForge-venv 软链）冲突
+echo ""
+echo "==> 安装 serve.py 依赖..."
+SERVE_VENV="$PROJECT_DIR/.venv-serve"
+if [ ! -d "$SERVE_VENV" ]; then
+    uv venv "$SERVE_VENV" --quiet
+fi
+uv pip install --python "$SERVE_VENV" markdown-it-py pyyaml --quiet
+echo "✓ serve.py 依赖安装完成（.venv-serve/）"
+echo "  启动 Dashboard：.venv-serve/bin/python3 scripts/serve.py 18999 --directory results"
+
 # ── 安装 llm-benchmark 依赖 ────────────────────────────
 echo ""
 echo "==> 安装 llm-benchmark 依赖（uv sync）..."

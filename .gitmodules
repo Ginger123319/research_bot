@@ -1,0 +1,7 @@
+[submodule "third_party/llm-benchmark"]
+	path = third_party/llm-benchmark
+	url = git@git.xxwolo.com:ai-infra/llm-benchmark.git
+	branch = dev_analysis_compare
+[submodule "third_party/data_analysis"]
+	path = third_party/data_analysis
+	url = git@git.xxwolo.com:ai-infra-any/data_analysis.git

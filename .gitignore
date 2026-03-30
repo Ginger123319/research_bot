@@ -36,3 +36,4 @@ tmp/
 # 编辑器
 .idea/
 *.iml
+third_party/speculative-decoding-benchmark

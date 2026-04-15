@@ -1,0 +1,41 @@
+# 大型数据目录（不纳入版本控制）
+logs
+
+# Node.js
+node_modules/
+
+# Python 虚拟环境
+.venv
+.venv/
+.venv-serve/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# 分析结果目录（软链指向共享 NFS，不纳入版本控制）
+results
+
+# 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
+# results/**/*.html
+
+# 临时文件
+tmp/
+*.tmp
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter 临时文件
+.ipynb_checkpoints/
+
+# 编辑器
+.idea/
+*.iml
+third_party/speculative-decoding-benchmark
+.env.local
+.serve.pid

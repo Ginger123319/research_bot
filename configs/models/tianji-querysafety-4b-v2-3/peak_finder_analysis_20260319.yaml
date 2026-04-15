@@ -1,0 +1,11 @@
+groups:
+  - label: "tianji-querysafety 4TP×1实例（bakv1）"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/tianji-querysafety-bakv1-phase23_merged_20260319"
+
+x_key: request_rate
+output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/tianji-querysafety_peak_finder_20260319"
+
+sla_config:
+  ttfs_p90: 1.5
+  e2e_p90: 0.3
+  success_rate: 0.99

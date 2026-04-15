@@ -1,0 +1,1493 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>guofan-nanobot · 方法论报告</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;800&family=Noto+Sans+SC:wght@300;400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060c18;
+    --surface: #0d1829;
+    --surface2: #122038;
+    --border: #1e3a5f;
+    --cyan: #22d3ee;
+    --blue: #3b82f6;
+    --amber: #f59e0b;
+    --green: #10b981;
+    --red: #f43f5e;
+    --purple: #a78bfa;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --dim: #334155;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Noto Sans SC', sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* ── NOISE TEXTURE ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── GRID BACKGROUND ── */
+  .grid-bg {
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(34,211,238,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(34,211,238,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── LAYOUT ── */
+  .container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0 2rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  section { padding: 5rem 0; }
+
+  /* ── NAV ── */
+  nav {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    z-index: 100;
+    background: rgba(6,12,24,0.85);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0.75rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .nav-logo {
+    font-family: 'Orbitron', monospace;
+    font-size: 12px;
+    letter-spacing: 0.15em;
+    color: var(--cyan);
+    font-weight: 600;
+  }
+
+  .nav-links {
+    display: flex;
+    gap: 2rem;
+    list-style: none;
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+  }
+
+  .nav-links a { color: var(--muted); text-decoration: none; cursor: pointer; transition: color 0.2s; }
+  .nav-links a:hover, .nav-links a.active { color: var(--cyan); }
+
+  /* ── HERO ── */
+  .hero {
+    padding-top: 7rem;
+    padding-bottom: 4rem;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+  }
+
+  .hero-inner {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4rem;
+    align-items: center;
+  }
+
+  .hero-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--cyan);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+    opacity: 0;
+    animation: fadeUp 0.6s ease forwards 0.2s;
+  }
+
+  .hero-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 2.4rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin-bottom: 1.2rem;
+    opacity: 0;
+    animation: fadeUp 0.6s ease forwards 0.4s;
+  }
+
+  .hero-title .hl { color: var(--cyan); }
+  .hero-title .hl2 { color: var(--amber); }
+
+  .hero-sub {
+    font-size: 15px;
+    color: #94a3b8;
+    line-height: 1.8;
+    margin-bottom: 2rem;
+    opacity: 0;
+    animation: fadeUp 0.6s ease forwards 0.6s;
+  }
+
+  .hero-stats {
+    display: flex;
+    gap: 2rem;
+    opacity: 0;
+    animation: fadeUp 0.6s ease forwards 0.8s;
+  }
+
+  .stat-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .stat-num {
+    font-family: 'Orbitron', monospace;
+    font-size: 2rem;
+    font-weight: 800;
+    color: var(--cyan);
+    line-height: 1;
+  }
+
+  .stat-label {
+    font-size: 11px;
+    color: var(--muted);
+    letter-spacing: 0.08em;
+  }
+
+  /* ── HERO DIAGRAM ── */
+  .hero-diagram {
+    opacity: 0;
+    animation: fadeUp 0.8s ease forwards 0.6s;
+  }
+
+  .pipeline-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .pipeline-box::before {
+    content: '';
+    position: absolute;
+    top: -50%;
+    left: -50%;
+    width: 200%;
+    height: 200%;
+    background: radial-gradient(ellipse at 60% 40%, rgba(34,211,238,0.06), transparent 60%);
+    pointer-events: none;
+  }
+
+  .pipeline-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.15em;
+    margin-bottom: 1rem;
+  }
+
+  .pipeline-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .pipeline-step {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.5rem 0.8rem;
+    background: var(--surface2);
+    border-radius: 6px;
+    border-left: 2px solid var(--border);
+    transition: all 0.3s;
+    cursor: default;
+  }
+
+  .pipeline-step:hover {
+    border-left-color: var(--cyan);
+    background: rgba(34,211,238,0.06);
+    transform: translateX(4px);
+  }
+
+  .step-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    min-width: 1.5rem;
+  }
+
+  .step-skill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--cyan);
+    flex: 1;
+  }
+
+  .step-desc {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── SECTION HEADER ── */
+  .sec-header {
+    text-align: center;
+    margin-bottom: 3.5rem;
+  }
+
+  .sec-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--cyan);
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    margin-bottom: 0.8rem;
+  }
+
+  .sec-title {
+    font-family: 'Orbitron', monospace;
+    font-size: 1.6rem;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.8rem;
+  }
+
+  .sec-sub {
+    font-size: 14px;
+    color: var(--muted);
+    max-width: 500px;
+    margin: 0 auto;
+  }
+
+  /* ── PAIN POINTS ── */
+  .pain-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 2.5rem;
+  }
+
+  .pain-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.8rem;
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.3s, border-color 0.3s;
+  }
+
+  .pain-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--red);
+  }
+
+  .pain-card::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--red), transparent);
+  }
+
+  .pain-icon {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    display: block;
+  }
+
+  .pain-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 0.6rem;
+  }
+
+  .pain-desc {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  .pain-metric {
+    margin-top: 1rem;
+    padding: 0.4rem 0.8rem;
+    background: rgba(244,63,94,0.08);
+    border: 1px solid rgba(244,63,94,0.2);
+    border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--red);
+  }
+
+  /* ── DIVIDER ARROW ── */
+  .divider-arrow {
+    text-align: center;
+    padding: 1.5rem 0;
+    font-size: 1.5rem;
+    color: var(--cyan);
+    opacity: 0.6;
+  }
+
+  /* ── WORKSPACE SECTION ── */
+  .workspace-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 3rem;
+    align-items: start;
+  }
+
+  .ws-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+  }
+
+  .ws-file {
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+    padding: 0.8rem 1.2rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+  }
+
+  .ws-file:hover {
+    border-color: var(--purple);
+    background: rgba(167,139,250,0.06);
+  }
+
+  .ws-file.active {
+    border-color: var(--cyan);
+    background: rgba(34,211,238,0.06);
+  }
+
+  .ws-file-icon {
+    font-size: 1rem;
+    min-width: 1.5rem;
+    text-align: center;
+  }
+
+  .ws-file-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--cyan);
+    flex: 1;
+  }
+
+  .ws-file-role {
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .ws-detail {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    min-height: 300px;
+  }
+
+  .ws-detail-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px;
+    color: var(--cyan);
+    margin-bottom: 1rem;
+    padding-bottom: 0.8rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .ws-detail-content {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.9;
+  }
+
+  .ws-detail-content ul {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .ws-detail-content li::before {
+    content: '→ ';
+    color: var(--cyan);
+  }
+
+  /* ── SKILLS MAP ── */
+  .skills-phases {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .phase-block {
+    position: relative;
+  }
+
+  .phase-title {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.8rem;
+  }
+
+  .phase-title::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .skills-row {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+  }
+
+  .skill-chip {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    cursor: pointer;
+    transition: all 0.3s;
+    position: relative;
+  }
+
+  .skill-chip:hover {
+    transform: scale(1.05);
+  }
+
+  .skill-chip.phase-deploy { border-color: rgba(59,130,246,0.5); }
+  .skill-chip.phase-deploy:hover { background: rgba(59,130,246,0.1); border-color: var(--blue); }
+
+  .skill-chip.phase-sweep { border-color: rgba(245,158,11,0.5); }
+  .skill-chip.phase-sweep:hover { background: rgba(245,158,11,0.1); border-color: var(--amber); }
+
+  .skill-chip.phase-report { border-color: rgba(16,185,129,0.5); }
+  .skill-chip.phase-report:hover { background: rgba(16,185,129,0.1); border-color: var(--green); }
+
+  .skill-chip.phase-meta { border-color: rgba(167,139,250,0.5); }
+  .skill-chip.phase-meta:hover { background: rgba(167,139,250,0.1); border-color: var(--purple); }
+
+  .skill-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+  .phase-deploy .skill-dot { background: var(--blue); }
+  .phase-sweep .skill-dot { background: var(--amber); }
+  .phase-report .skill-dot { background: var(--green); }
+  .phase-meta .skill-dot { background: var(--purple); }
+
+  .skill-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--text);
+  }
+
+  /* ── TOOLTIP ── */
+  .tooltip {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: #1e2d3d;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.6rem 0.8rem;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.2s;
+    z-index: 50;
+    min-width: 180px;
+    text-align: center;
+  }
+
+  .skill-chip:hover .tooltip { opacity: 1; }
+
+  /* ── AGENT LOOP DIAGRAM ── */
+  .agent-flow {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    overflow-x: auto;
+    padding: 2rem 0;
+  }
+
+  .flow-node {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .flow-box {
+    padding: 0.8rem 1.2rem;
+    border-radius: 8px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    min-width: 100px;
+  }
+
+  .flow-box-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+  }
+
+  .flow-box-sub {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  .flow-box.user-node {
+    background: rgba(167,139,250,0.1);
+    border: 1px solid rgba(167,139,250,0.4);
+  }
+
+  .flow-box.user-node .flow-box-label { color: var(--purple); }
+
+  .flow-box.agent-node {
+    background: rgba(34,211,238,0.1);
+    border: 1px solid rgba(34,211,238,0.4);
+  }
+
+  .flow-box.agent-node .flow-box-label { color: var(--cyan); }
+
+  .flow-box.workspace-node {
+    background: rgba(59,130,246,0.1);
+    border: 1px solid rgba(59,130,246,0.4);
+  }
+
+  .flow-box.workspace-node .flow-box-label { color: var(--blue); }
+
+  .flow-box.skill-node {
+    background: rgba(245,158,11,0.1);
+    border: 1px solid rgba(245,158,11,0.4);
+  }
+
+  .flow-box.skill-node .flow-box-label { color: var(--amber); }
+
+  .flow-box.exec-node {
+    background: rgba(16,185,129,0.1);
+    border: 1px solid rgba(16,185,129,0.4);
+  }
+
+  .flow-box.exec-node .flow-box-label { color: var(--green); }
+
+  .flow-box:hover {
+    transform: scale(1.06);
+    box-shadow: 0 0 20px rgba(34,211,238,0.15);
+  }
+
+  .flow-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 0 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .flow-arrow-line {
+    width: 40px;
+    height: 1px;
+    background: linear-gradient(90deg, var(--border), var(--cyan));
+    position: relative;
+  }
+
+  .flow-arrow-line::after {
+    content: '▶';
+    position: absolute;
+    right: -6px;
+    top: -7px;
+    font-size: 8px;
+    color: var(--cyan);
+  }
+
+  .flow-arrow-label {
+    font-size: 9px;
+    color: var(--muted);
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+  }
+
+  /* ── RESULTS ── */
+  .results-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 3rem;
+  }
+
+  .result-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 1.5rem;
+    transition: all 0.3s;
+    cursor: default;
+  }
+
+  .result-card:hover {
+    transform: translateY(-4px);
+    border-color: var(--green);
+    box-shadow: 0 8px 30px rgba(16,185,129,0.1);
+  }
+
+  .result-card::after {
+    content: '';
+    display: block;
+    margin-top: 1rem;
+    height: 2px;
+    background: linear-gradient(90deg, var(--green), transparent);
+    border-radius: 2px;
+  }
+
+  .result-model {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--cyan);
+    margin-bottom: 0.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .result-alias {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 1rem;
+  }
+
+  .result-metrics {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .result-metric {
+    display: flex;
+    justify-content: space-between;
+    font-size: 11px;
+  }
+
+  .result-metric-key { color: var(--muted); }
+  .result-metric-val { color: var(--amber); font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+  /* ── INSIGHT BOX ── */
+  .insight-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-top: 2rem;
+  }
+
+  .insight-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--cyan);
+    border-radius: 8px;
+    padding: 1.2rem 1.5rem;
+  }
+
+  .insight-title {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--cyan);
+    margin-bottom: 0.4rem;
+  }
+
+  .insight-text {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+
+  /* ── FOOTER ── */
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 2rem 0;
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  /* ── ANIMATIONS ── */
+  @keyframes fadeUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .pulse { animation: pulse 2s infinite; }
+
+  /* ── SECTION REVEAL ── */
+  .reveal {
+    opacity: 0;
+    transform: translateY(30px);
+    transition: opacity 0.7s ease, transform 0.7s ease;
+  }
+
+  .reveal.visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  /* ── SEPARATOR ── */
+  .sep {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 0;
+  }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 768px) {
+    .hero-inner { grid-template-columns: 1fr; gap: 2rem; }
+    .hero-title { font-size: 1.7rem; }
+    .pain-grid { grid-template-columns: 1fr; }
+    .results-grid { grid-template-columns: 1fr; }
+    .workspace-grid { grid-template-columns: 1fr; }
+    .insight-grid { grid-template-columns: 1fr; }
+    .agent-flow { flex-direction: column; align-items: flex-start; gap: 0.5rem; padding: 1rem 0; }
+    .flow-arrow { flex-direction: row; transform: rotate(90deg) translateX(-8px); }
+    .flow-arrow-line { width: 24px; }
+    .hero-stats { gap: 1.5rem; }
+  }
+
+  /* ── TAG BADGE ── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 3px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+  }
+
+  .badge-new { background: rgba(34,211,238,0.15); color: var(--cyan); border: 1px solid rgba(34,211,238,0.3); }
+  .badge-done { background: rgba(16,185,129,0.15); color: var(--green); border: 1px solid rgba(16,185,129,0.3); }
+  .badge-wip { background: rgba(245,158,11,0.15); color: var(--amber); border: 1px solid rgba(245,158,11,0.3); }
+</style>
+</head>
+<body>
+
+<div class="grid-bg"></div>
+
+<!-- NAV -->
+<nav>
+  <div class="nav-logo">GUOFAN · NANOBOT</div>
+  <ul class="nav-links">
+    <li><a onclick="navTo('pain')">痛点</a></li>
+    <li><a onclick="navTo('workspace')">Workspace</a></li>
+    <li><a onclick="navTo('skills')">Skills 地图</a></li>
+    <li><a onclick="navTo('loop')">执行链路</a></li>
+    <li><a onclick="navTo('results')">评估结果</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="container">
+    <div class="hero-inner">
+      <div class="hero-left">
+        <div class="hero-tag">// METHODOLOGY REPORT · 2026 Q1</div>
+        <h1 class="hero-title">
+          用 <span class="hl">Agent</span><br>
+          驱动 <span class="hl2">LLM 评估</span><br>
+          自动化链路
+        </h1>
+        <p class="hero-sub">
+          基于 nanobot 框架，通过 Workspace 工程化 + 12 个可复用 Skill，
+          将"部署→压测→分析→报告"全链路封装为可调用的 Agent 工作流。
+        </p>
+        <div class="hero-stats">
+          <div class="stat-item">
+            <div class="stat-num">7</div>
+            <div class="stat-label">模型已评估</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-num">12</div>
+            <div class="stat-label">可复用 Skills</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-num">65%</div>
+            <div class="stat-label">压测时间节省</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-diagram">
+        <div class="pipeline-box">
+          <div class="pipeline-label">// model-evaluation-workflow · 7-STEP PIPELINE</div>
+          <div class="pipeline-flow">
+            <div class="pipeline-step">
+              <span class="step-num">01</span>
+              <span class="step-skill">llm-deployment-docker</span>
+              <span class="step-desc">部署推理服务</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">02</span>
+              <span class="step-skill">llm-service-probing</span>
+              <span class="step-desc">探针检测</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">03</span>
+              <span class="step-skill">traffic-dataset-prep</span>
+              <span class="step-desc">压测数据集构建</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">04</span>
+              <span class="step-skill">llm-replay-benchmark</span>
+              <span class="step-desc">真实流量回放</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">05</span>
+              <span class="step-skill">qps-peak-finder</span>
+              <span class="step-desc">三阶段自适应逼近</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">06</span>
+              <span class="step-skill">benchmark-result-analysis</span>
+              <span class="step-desc">结果分析 + 可视化</span>
+            </div>
+            <div class="pipeline-step">
+              <span class="step-num">07</span>
+              <span class="step-skill">model-eval-report</span>
+              <span class="step-desc">交付报告生成</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- PAIN POINTS -->
+<section id="pain">
+  <div class="container reveal">
+    <div class="sec-header">
+      <div class="sec-tag">// 01 · PROBLEM</div>
+      <h2 class="sec-title">手工评估的三大痛点</h2>
+      <p class="sec-sub">将一个 LLM 模型从部署到出具评估报告，过去需要人工干预每一步</p>
+    </div>
+
+    <div class="pain-grid">
+      <div class="pain-card">
+        <span class="pain-icon">⚙️</span>
+        <div class="pain-title">步骤繁琐，全程人工</div>
+        <div class="pain-desc">
+          部署 → 探针 → 数据集 → 压测 → 分析 → 报告，每个环节都需要切换脚本、手动传参，一个模型完整走完需 2~3 天。
+        </div>
+        <div class="pain-metric">每模型手工介入 15+ 次</div>
+      </div>
+      <div class="pain-card">
+        <span class="pain-icon">🔁</span>
+        <div class="pain-title">脚本分散，难以复用</div>
+        <div class="pain-desc">
+          不同模型的压测脚本各自定制，参数命名不统一，下一个模型开始时几乎从零开始，经验无法沉淀。
+        </div>
+        <div class="pain-metric">跨模型重复劳动 ~60%</div>
+      </div>
+      <div class="pain-card">
+        <span class="pain-icon">🔍</span>
+        <div class="pain-title">过程黑盒，出错难定位</div>
+        <div class="pain-desc">
+          压测命令跑在远端 GPU 服务器，执行过程不可见；EAGLE3 avg_output_len 高估、Phase 3 并发污染等问题，发现滞后。
+        </div>
+        <div class="pain-metric">1 次根因排查平均耗时 4h+</div>
+      </div>
+    </div>
+
+    <div class="divider-arrow">↓ nanobot + Skills 的解法</div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- WORKSPACE -->
+<section id="workspace">
+  <div class="container reveal">
+    <div class="sec-header">
+      <div class="sec-tag">// 02 · SOLUTION · WORKSPACE</div>
+      <h2 class="sec-title">Workspace：给 Agent 的"工程记忆"</h2>
+      <p class="sec-sub">5 个结构化文件，将项目知识、行为规程、陷阱规则注入 Agent 上下文</p>
+    </div>
+
+    <div class="workspace-grid">
+      <div class="ws-stack" id="wsStack">
+        <div class="ws-file active" onclick="showWsDetail('agents')" data-file="agents">
+          <span class="ws-file-icon">⚡</span>
+          <span class="ws-file-name">AGENTS.md</span>
+          <span class="ws-file-role">行为规程 + 触发规则</span>
+        </div>
+        <div class="ws-file" onclick="showWsDetail('memory')" data-file="memory">
+          <span class="ws-file-icon">🧠</span>
+          <span class="ws-file-name">MEMORY.md</span>
+          <span class="ws-file-role">技术记忆 + 项目状态</span>
+        </div>
+        <div class="ws-file" onclick="showWsDetail('soul')" data-file="soul">
+          <span class="ws-file-icon">🎭</span>
+          <span class="ws-file-name">SOUL.md</span>
+          <span class="ws-file-role">人格 + 思维风格</span>
+        </div>
+        <div class="ws-file" onclick="showWsDetail('user')" data-file="user">
+          <span class="ws-file-icon">👤</span>
+          <span class="ws-file-name">USER.md</span>
+          <span class="ws-file-role">用户画像 + 偏好</span>
+        </div>
+        <div class="ws-file" onclick="showWsDetail('tools')" data-file="tools">
+          <span class="ws-file-icon">🛠️</span>
+          <span class="ws-file-name">TOOLS.md</span>
+          <span class="ws-file-role">工具链索引 + 执行规范</span>
+        </div>
+      </div>
+
+      <div class="ws-detail" id="wsDetail">
+        <div class="ws-detail-title" id="wsDetailTitle"># AGENTS.md · 行为规程</div>
+        <div class="ws-detail-content" id="wsDetailContent">
+          <ul>
+            <li>12 个 guofan Skill 的触发关键词映射表（自然语言 → Skill 文件路径）</li>
+            <li>高频陷阱库：benchmark 成功率计算、avg_output_len 高估、Phase 3 并发污染等 8 条规则</li>
+            <li>远端写权限白名单（gpu_l20_6_direct 路径范围）</li>
+            <li>强制行为：遇到 guofan 任务先 read Skill，禁止自行写临时脚本</li>
+            <li>会话结束触发：更新 progress.md + project_status.md</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- AGENT LOOP -->
+<section id="loop">
+  <div class="container reveal">
+    <div class="sec-header">
+      <div class="sec-tag">// 03 · SOLUTION · AGENT LOOP</div>
+      <h2 class="sec-title">Agent 执行链路</h2>
+      <p class="sec-sub">从用户自然语言指令到 GPU 服务器执行结果的完整流转路径</p>
+    </div>
+
+    <div class="agent-flow">
+      <div class="flow-node">
+        <div class="flow-box user-node">
+          <div class="flow-box-label">用户指令</div>
+          <div class="flow-box-sub">飞书 / CLI</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="flow-arrow-line"></div>
+        <div class="flow-arrow-label">消息</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-box agent-node">
+          <div class="flow-box-label">nanobot</div>
+          <div class="flow-box-sub">AgentLoop</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="flow-arrow-line"></div>
+        <div class="flow-arrow-label">注入上下文</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-box workspace-node">
+          <div class="flow-box-label">Workspace</div>
+          <div class="flow-box-sub">5 files</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="flow-arrow-line"></div>
+        <div class="flow-arrow-label">匹配关键词</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-box skill-node">
+          <div class="flow-box-label">Skill 读取</div>
+          <div class="flow-box-sub">SKILL.md</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="flow-arrow-line"></div>
+        <div class="flow-arrow-label">SSH 执行</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-box exec-node">
+          <div class="flow-box-label">远端 GPU</div>
+          <div class="flow-box-sub">guofan 脚本</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow">
+        <div class="flow-arrow-line"></div>
+        <div class="flow-arrow-label">结构化输出</div>
+      </div>
+
+      <div class="flow-node">
+        <div class="flow-box user-node">
+          <div class="flow-box-label">评估报告</div>
+          <div class="flow-box-sub">REPORT.md</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="insight-grid">
+      <div class="insight-box">
+        <div class="insight-title">🔑 关键设计：Skill 作为"行为说明书"</div>
+        <div class="insight-text">
+          SKILL.md 不是代码，而是 LLM 可读的结构化指令。Agent 读取后严格按步骤执行，确保每次评估流程一致、可审计。
+        </div>
+      </div>
+      <div class="insight-box">
+        <div class="insight-title">🔑 关键设计：AGENTS.md 触发路由</div>
+        <div class="insight-text">
+          预定义关键词 → Skill 路径的映射表，让 Agent 在遇到"QPS 扫描"、"部署模型"等词时，无需推理即可找到正确工具。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- SKILLS MAP -->
+<section id="skills">
+  <div class="container reveal">
+    <div class="sec-header">
+      <div class="sec-tag">// 04 · SOLUTION · SKILLS</div>
+      <h2 class="sec-title">12 个可复用 Skills 地图</h2>
+      <p class="sec-sub">按"部署 → 压测 → 分析 → 报告"链路组织，覆盖 LLM 评估全阶段</p>
+    </div>
+
+    <div class="skills-phases">
+      <div class="phase-block">
+        <div class="phase-title" style="color: var(--blue)">PHASE · 部署与探针</div>
+        <div class="skills-row">
+          <div class="skill-chip phase-deploy">
+            <span class="skill-dot"></span>
+            <span class="skill-name">llm-deployment-docker</span>
+            <div class="tooltip">SGLang 推理服务 Docker 部署</div>
+          </div>
+          <div class="skill-chip phase-deploy">
+            <span class="skill-dot"></span>
+            <span class="skill-name">llm-service-probing</span>
+            <div class="tooltip">检测模型类型、输出格式、健康状态</div>
+          </div>
+          <div class="skill-chip phase-deploy">
+            <span class="skill-dot"></span>
+            <span class="skill-name">traffic-dataset-prep</span>
+            <div class="tooltip">业务日志 → 泊松插值压测数据集</div>
+          </div>
+          <div class="skill-chip phase-deploy">
+            <span class="skill-dot"></span>
+            <span class="skill-name">llm-replay-benchmark</span>
+            <div class="tooltip">真实流量回放，保持原始时间分布</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phase-block">
+        <div class="phase-title" style="color: var(--amber)">PHASE · QPS 压测</div>
+        <div class="skills-row">
+          <div class="skill-chip phase-sweep">
+            <span class="skill-dot"></span>
+            <span class="skill-name">qps-benchmark-sweep</span>
+            <div class="tooltip">全档扫描，20~30 档，适合首次探索</div>
+          </div>
+          <div class="skill-chip phase-sweep">
+            <span class="skill-dot"></span>
+            <span class="skill-name">qps-peak-finder</span>
+            <div class="tooltip">三阶段自适应逼近：饱和探测→逼近→验证网格</div>
+          </div>
+          <div class="skill-chip phase-sweep">
+            <span class="skill-dot"></span>
+            <span class="skill-name">qps-sweep-comparison</span>
+            <div class="tooltip">多组 QPS 扫描结果横向对比可视化</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phase-block">
+        <div class="phase-title" style="color: var(--green)">PHASE · 分析与报告</div>
+        <div class="skills-row">
+          <div class="skill-chip phase-report">
+            <span class="skill-dot"></span>
+            <span class="skill-name">benchmark-result-analysis</span>
+            <div class="tooltip">单次/多次结果分析，生成 HTML+PNG+REPORT 骨架</div>
+          </div>
+          <div class="skill-chip phase-report">
+            <span class="skill-dot"></span>
+            <span class="skill-name">qps-peak-finder-analysis</span>
+            <div class="tooltip">Phase 2+3 合并分析，Little's Law 三锚点</div>
+          </div>
+          <div class="skill-chip phase-report">
+            <span class="skill-dot"></span>
+            <span class="skill-name">model-eval-report</span>
+            <div class="tooltip">生成最终交付报告 EVAL_REPORT.md</div>
+          </div>
+          <div class="skill-chip phase-report">
+            <span class="skill-dot"></span>
+            <span class="skill-name">model-evaluation-workflow</span>
+            <div class="tooltip">端到端 7 步评估编排总 Skill</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="phase-block">
+        <div class="phase-title" style="color: var(--purple)">META · 生态能力</div>
+        <div class="skills-row">
+          <div class="skill-chip phase-meta">
+            <span class="skill-dot"></span>
+            <span class="skill-name">writing-skills</span>
+            <div class="tooltip">Skill 创作与验证规范</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<!-- RESULTS -->
+<section id="results">
+  <div class="container reveal">
+    <div class="sec-header">
+      <div class="sec-tag">// 05 · RESULTS</div>
+      <h2 class="sec-title">7 个模型评估结果</h2>
+      <p class="sec-sub">链路验证：每个模型都通过 Skill 编排完成，SLA 拐点数据可复现</p>
+    </div>
+
+    <div class="results-grid" style="grid-template-columns: repeat(4,1fr);">
+      <div class="result-card">
+        <div class="result-model">tianji-querysafety-4b-v2-3</div>
+        <div class="result-alias">安全拦截模型 · 4TP × L20 × 8实例</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">ideal_rps</span>
+            <span class="result-metric-val">7.8554 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">SLA 上限</span>
+            <span class="result-metric-val">471 RPM</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">当前余量</span>
+            <span class="result-metric-val">2.6%⚠️ 建议扩9实例</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <div class="result-model">xinghan-ziwei-32b-v1</div>
+        <div class="result-alias">紫微对话模型 · 8TP × L20 × 2实例</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">ideal_rps</span>
+            <span class="result-metric-val">1.5902 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">回放成功率</span>
+            <span class="result-metric-val">99.97%</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">建议</span>
+            <span class="result-metric-val">可缩容至1实例节省8卡</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <div class="result-model">xinghan-hepan-72b-v1-2</div>
+        <div class="result-alias">合盘对话模型 · 8TP × L20</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">SLA rps</span>
+            <span class="result-metric-val">0.80 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">回放成功率</span>
+            <span class="result-metric-val">100%</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">E2E P90</span>
+            <span class="result-metric-val">14.6s</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <div class="result-model">lingyu-235b-A22b-v9-2</div>
+        <div class="result-alias">通用对话模型 · 8TP × H20 × 10实例</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">拐点 rps</span>
+            <span class="result-metric-val">2.0 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">最大 rps</span>
+            <span class="result-metric-val">3.0 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">拐点类型</span>
+            <span class="result-metric-val">软拐点</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <div class="result-model">guoxue-72b-reason · 混合部署</div>
+        <div class="result-alias">八字命理推理模型 · 6×H20 + 4×L20</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">L20 ideal_rps</span>
+            <span class="result-metric-val">0.2114 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">H20 ideal_rps</span>
+            <span class="result-metric-val">0.5878 req/s（2.78×）</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">混合余量</span>
+            <span class="result-metric-val">2.6%⚠️ 262.6/256 RPM</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card">
+        <div class="result-model">chart-32b-v1-1-agent</div>
+        <div class="result-alias">星盘 Agent 模型 · 8TP × L20 × 2实例</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">8TP ideal_rps</span>
+            <span class="result-metric-val">3.8286 req/s</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">8TP/4TP 倍率</span>
+            <span class="result-metric-val">1.73x</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">回放成功率</span>
+            <span class="result-metric-val">100%</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="result-card" style="border-color: rgba(34,211,238,0.3);">
+        <div class="result-model" style="color: var(--amber)">chart-deep-v5-2-235B ✨NEW</div>
+        <div class="result-alias">图表深度分析 · 8TP × H20</div>
+        <div class="result-metrics">
+          <div class="result-metric">
+            <span class="result-metric-key">ideal_rps</span>
+            <span class="result-metric-val">1.4350 req/s (86 RPM)</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">回放成功率</span>
+            <span class="result-metric-val">100%</span>
+          </div>
+          <div class="result-metric">
+            <span class="result-metric-key">TTFS P90</span>
+            <span class="result-metric-val">866ms（余量 42%）</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="insight-grid">
+      <div class="insight-box">
+        <div class="insight-title">📊 qps-peak-finder 核心价值</div>
+        <div class="insight-text">
+          三阶段自适应逼近 vs 传统全档扫描：13 档 × 5h13min vs 20+ 档 × 15h+，节省 65% 时间，同时精度更高（SLA 边界精确到 0.005 req/s 量级）。
+        </div>
+      </div>
+      <div class="insight-box">
+        <div class="insight-title">📊 H20 vs L20 效率规律</div>
+        <div class="insight-text">
+          guoxue-72b 验证：4×H20 = 2.78× 8×L20，单卡效率 5.56x。chart-deep 使用 8×H20 取得 86 RPM 单实例承载；Dashboard 已上线 <span style="font-family: 'JetBrains Mono', monospace; color: var(--cyan)">172.21.208.11:18999</span>。
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<hr class="sep">
+
+<footer>
+  <div class="container">
+    <span style="color: var(--cyan)">GUOFAN-NANOBOT</span> · Yuxin · AI Infra · 2026 Q1 · 
+    <span class="badge badge-done">7 MODELS DONE</span> &nbsp;
+    <span class="badge badge-wip">2 IN PROGRESS</span> &nbsp;
+    <span class="badge badge-new">12 SKILLS BUILT</span>
+  </div>
+</footer>
+
+<script>
+  // Workspace file detail data
+  const wsData = {
+    agents: {
+      title: '# AGENTS.md · 行为规程',
+      items: [
+        '12 个 guofan Skill 的触发关键词映射表（自然语言 → Skill 文件路径）',
+        '高频陷阱库：benchmark 成功率计算、avg_output_len 高估、Phase 3 并发污染等 8 条规则',
+        '远端写权限白名单（gpu_l20_6_direct 路径范围）',
+        '强制行为：遇到 guofan 任务先 read Skill，禁止自行写临时脚本',
+        '会话结束触发：更新 progress.md + project_status.md',
+      ]
+    },
+    memory: {
+      title: '# MEMORY.md · 技术记忆',
+      items: [
+        '6 个已评估模型的 SLA 拐点数据与关键发现（持久沉淀，跨会话可查）',
+        '技术决策规则库：4 条基于实测总结的通用规律（IF-THEN 格式）',
+        '当前进行中的评估状态（EAGLE3、chart-32b V2）',
+        'DataConverter ai_deep_content 字段遗漏根因与修复规则',
+        '生产部署方案：混合 H20+L20，余量 2.6%',
+      ]
+    },
+    soul: {
+      title: '# SOUL.md · 人格特质',
+      items: [
+        'Root cause analyst：异常结果逐层分解（触发→队列→方法论→根本假设）',
+        'Data-driven asserter：拒绝"可能是"式猜测，用数据而非经验下结论',
+        'Correctness over momentum：数据矛盾时停下来重推，不保留错误结论',
+        '结构化输出优先：ASCII 图、对比表格、代码佐证技术论断',
+        '设计先行：有代码改动必先提方案，不跳步实现',
+      ]
+    },
+    user: {
+      title: '# USER.md · 用户画像',
+      items: [
+        'AI Infra 工程师，Expert 级别（LLM 推理部署、性能压测、Agent 工程化）',
+        '主力环境：Miniforge nanobot-dev，Cursor IDE，macOS arm64',
+        '双项目背景：guofan（LLM 评估）+ nanobot（个人 Agent 生态）',
+        '设计评审偏好：甲方视角，关注数据一致性、错误处理友好性、可扩展性',
+        '容量规划偏好：关注真实承载能力，优先延迟优势',
+      ]
+    },
+    tools: {
+      title: '# TOOLS.md · 工具链索引',
+      items: [
+        'SSH 执行模式：所有 guofan 命令通过 ssh gpu_l20_6_direct 在远端执行',
+        '12 个 Skill 软链接到 ~/.nanobot/workspace/skills/（本地 LLM 可读）',
+        '脚本快速参考表：offline_analysis.py / compare_analysis.py / analyze_peak_finder.py 参数',
+        'nanobot 内部机制：AgentLoop 进度推送方式、heartbeat 配置',
+        'guofan 结果资产管理规范：INDEX.yaml schema、logs 归档结构',
+      ]
+    }
+  };
+
+  function showWsDetail(key) {
+    const data = wsData[key];
+    document.getElementById('wsDetailTitle').textContent = data.title;
+    const ul = document.createElement('ul');
+    data.items.forEach(item => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      ul.appendChild(li);
+    });
+    const content = document.getElementById('wsDetailContent');
+    content.innerHTML = '';
+    content.appendChild(ul);
+
+    // Update active state
+    document.querySelectorAll('.ws-file').forEach(el => el.classList.remove('active'));
+    document.querySelector(`[data-file="${key}"]`).classList.add('active');
+  }
+
+  // Nav scroll
+  function navTo(id) {
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Intersection observer for reveal
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.classList.add('visible');
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.reveal').forEach(el => observer.observe(el));
+
+  // Nav active highlight on scroll
+  const sections = ['pain','workspace','loop','skills','results'];
+  const navLinks = document.querySelectorAll('.nav-links a');
+  const sectionObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        navLinks.forEach(a => {
+          a.classList.toggle('active', a.getAttribute('onclick') === `navTo('${id}')`);
+        });
+      }
+    });
+  }, { threshold: 0.3 });
+  sections.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) sectionObserver.observe(el);
+  });
+</script>
+</body>
+</html>

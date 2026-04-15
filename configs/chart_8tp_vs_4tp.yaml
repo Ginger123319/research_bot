@@ -1,0 +1,14 @@
+# chart-32b 8TP vs 4TP 对比配置
+groups:
+  - label: "8TP×1实例"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/chart-32b-8tp/qps_20260318_134151"
+  - label: "4TP×1实例"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/chart-32b-4tp/qps_20260318_134345"
+
+x_key: request_rate
+output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/chart-32b_tp_compare_20260318"
+
+sla_config:
+  ttfs_p90: 1.8
+  e2e_p90: 180.0
+  success_rate: 0.99

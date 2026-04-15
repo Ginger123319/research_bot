@@ -1,0 +1,11 @@
+groups:
+  - label: "TP8×1实例"
+    dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/logs/guoxue_8tp_qps_20260316_163202"
+
+x_key: request_rate
+output_dir: "/mnt/ai-infra/users/wnd/workspace/execute/guofan/results/guoxue_qps_sweep_20260317"
+
+sla_config:
+  ttfs_p90: 1.5
+  e2e_p90: 150.0
+  success_rate: 0.99

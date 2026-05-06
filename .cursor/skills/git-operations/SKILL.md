@@ -92,6 +92,58 @@ main:    A - B - C - D
 
 ---
 
+### 校验两个分支是否对齐
+
+```bash
+# 方式一：看互相差了哪些提交（两个都为空 = 完全对齐）
+git log origin/main..HEAD --oneline   # dev_jyf 独有的提交
+git log HEAD..origin/main --oneline   # main 独有的提交
+
+# 方式二：直接比较 commit hash（相同 = 完全对齐）
+git rev-parse HEAD
+git rev-parse origin/main
+
+# 方式三：图形化查看分支关系
+git log --oneline --graph --all -10
+```
+
+---
+
+### rebase vs merge 把 main 合并到 dev_jyf
+
+两种方式都能把 main 的内容同步到 dev_jyf，但历史形状不同：
+
+```
+# Rebase（推荐）：一条直线，你的提交接在 main 最新提交后面
+main:    A - B - C - D
+dev_jyf:             D - X' - Y'
+
+# Merge（不推荐用于个人分支）：有分叉 + 多余 merge commit
+main:    A - B - C - D
+                      \
+dev_jyf:  A - B - X - Y - M
+```
+
+**`git rebase origin/main` = 把 main 的新代码拉到 dev_jyf，保持历史一条直线。**
+
+**分叉的影响：**
+- `git log` 时间混排，难以理解提交顺序
+- 多人多分支反复 merge 后变成「意大利面条图」
+- 产生无意义的 `Merge branch 'main' into dev_jyf` 提交
+- `git bisect` / `git blame` 查找 bug 效率降低
+
+**什么时候分叉是正常的：**
+功能完成后合入 main 时用 merge，留下合并节点记录「这个功能在何时合并进来」：
+```
+main:  A - B - C - D - M   ← M 明确记录了 dev_jyf 合并时间点
+                      /
+dev_jyf:    X' - Y'
+```
+
+**核心原则：个人开发分支同步 main 用 rebase（保持直线），功能完成合入 main 用 merge（留下合并节点）。**
+
+---
+
 ### 跨分支同步文件
 
 ```bash

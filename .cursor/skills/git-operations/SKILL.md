@@ -31,6 +31,56 @@ git config user.email "jiangyunfei@cylingo.com"
 
 ---
 
+## ⚠️ 推送前确认目标远程（每次 push 必做）
+
+本仓库配置了 **两个远程**，触发关键词 "推送 / push / 上传 / 同步" 时，**先确认用户要推到哪个远程，不要默认只推 origin**。
+
+| 远程 | URL | 用途 |
+|------|-----|------|
+| `origin` | `git@git.xxwolo.com:ai-infra-any/research_bot.git` | 内部 GitLab，团队协作主仓库 |
+| `github` | `git@github.com:Ginger123319/research_bot.git` | GitHub 外部备份/公开（用户 `Ginger123319`） |
+
+### 推送前必问 3 件事
+
+1. **推到哪个远程**：仅 `origin`、仅 `github`、还是两个都推？
+2. **推哪些分支**：当前分支、`main`、`--all`？
+3. **是否需要先 rebase** `origin/main` 保持线性历史？
+
+### 常用推送命令
+
+```bash
+# 日常：推到 GitLab
+git push origin dev_jyf
+
+# 同步到 GitHub（备份/公开场景）
+git push github dev_jyf
+git push github --all              # 一次性推所有本地分支
+
+# 两边都推
+git push origin dev_jyf && git push github dev_jyf
+```
+
+### GitHub 必须用 SSH，不要用 HTTPS
+
+**本环境下 HTTPS 推 GitHub 必失败**（实测报错 `fatal: unable to access ...: GnuTLS recv error (-110): The TLS connection was non-properly terminated.`）。
+
+```bash
+# ❌ 错误：HTTPS URL 推送会因 TLS 错误失败
+git remote add github https://github.com/Ginger123319/research_bot.git
+
+# ✅ 正确：使用 SSH URL
+git remote add github git@github.com:Ginger123319/research_bot.git
+
+# 已配置成 HTTPS 时的修复
+git remote set-url github git@github.com:Ginger123319/research_bot.git
+
+# 验证 SSH 连通性（首次需 accept-new 已知主机）
+ssh -T git@github.com
+# 预期输出：Hi Ginger123319! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+---
+
 ## Quick Reference
 
 ### 身份配置（user.name / user.email）
@@ -196,3 +246,5 @@ git config --global rerere.enabled true
 | 未配置 user.email 就提交 | GitLab 无法关联账号，先 `git config user.email` |
 | 误以为切换分支会丢失 config | config 绑定仓库/全局，与分支无关 |
 | rebase 冲突解完忘记 `--continue` | `git add` 后必须执行 `git rebase --continue` |
+| 推送时默认只推 `origin` | 本仓库有 `origin`(GitLab) 和 `github`(GitHub) 两个远程，先问用户推哪个 |
+| 用 HTTPS URL 配置 `github` 远程 | 本环境下必报 GnuTLS 错误，必须用 SSH URL `git@github.com:...` |

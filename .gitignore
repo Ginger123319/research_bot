@@ -1,6 +1,9 @@
 # 大型数据目录（不纳入版本控制）
 logs
 
+# 调研结果文档：只同步到 GitHub（via github-results orphan branch），不进 GitLab
+docs/results/
+
 # Node.js
 node_modules/
 
@@ -16,9 +19,6 @@ __pycache__/
 dist/
 build/
 .eggs/
-
-# 分析结果目录（软链指向共享 NFS，不纳入版本控制）
-results
 
 # 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
 # results/**/*.html

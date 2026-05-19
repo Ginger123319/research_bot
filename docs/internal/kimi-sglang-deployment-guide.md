@@ -1,7 +1,8 @@
 # Kimi K25 SGLang 部署指导文件
 
-> 记录日期：2026-05-18  
-> 目标：将 Kimi K25（MoE + VLM）使用 SGLang 在 3 节点 L20 集群上部署并优化推理性能
+> 记录日期：2026-05-18（更新：2026-05-19）
+> 目标：将 Kimi K25（MoE + VLM）使用 SGLang 在 3 节点 L20 集群上部署并优化推理性能  
+> SGLang 版本：**v0.5.12**（v0.5.11 明确支持 Kimi-K2 LoRA，v0.5.12 加入 Virtual Experts 优化）
 
 ---
 
@@ -58,44 +59,184 @@
 
 ## 二、部署计划
 
-### P0：多节点环境验证
-
-**目标**：确认 3 节点 SGLang 集群本身能跑通，排除环境问题。
-
-用官方支持的模型（如 Llama 3.1 405B）验证，而非直接上 Kimi 模型。
+### P0：环境安装
 
 ```bash
-# 节点 0（主节点，替换 <node0_ip>）
+pip install sglang==0.5.12
+python -c "import sglang; print(sglang.__version__)"  # 确认输出 0.5.12
+```
+
+NCCL 环境变量（Ethernet 集群，只有一张数据网卡 eth0，无需配 NCCL_SOCKET_IFNAME）：
+
+```bash
+export NCCL_IB_DISABLE=1    # 无 InfiniBand
+export NCCL_DEBUG=INFO      # 调试阶段开启，确认网卡选择正确后关闭
+```
+
+启动后用 `NCCL_DEBUG=INFO` 日志确认 NCCL 选中了 `eth0`（172.21.x.x 网段）而非 docker0。
+
+---
+
+### T1：小模型验证 MoE LoRA 路径（单节点，2 张 L20）
+
+**目的**：在权重未到位前，用公开小模型验证 SGLang v0.5.12 的 MoE LoRA 全流程是否正常。
+
+**模型**：`deepseek-ai/DeepSeek-V2-Lite-Chat`（16B MoE，bf16 约 32GB，2 卡够用）  
+**LoRA**：`wuchen01/DeepSeek-V2-Lite-Chat-All-LoRA`（PR #19711 验证过的架构）
+
+```bash
+sglang serve deepseek-ai/DeepSeek-V2-Lite-Chat \
+    --tp-size 2 \
+    --enable-lora \
+    --lora-paths lora0=wuchen01/DeepSeek-V2-Lite-Chat-All-LoRA \
+    --lora-backend triton \
+    --max-lora-rank 64 \
+    --max-loras-per-batch 2 \
+    --disable-shared-experts-fusion \
+    --disable-radix-cache \
+    --mem-fraction-static 0.85 \
+    --port 30000
+```
+
+验证 LoRA 生效（两条请求输出应有差异）：
+
+```bash
+# base model
+curl http://localhost:30000/generate \
+  -d '{"text":"介绍MoE模型","sampling_params":{"max_new_tokens":64}}'
+
+# lora0
+curl http://localhost:30000/generate \
+  -d '{"text":"介绍MoE模型","lora_path":"lora0","sampling_params":{"max_new_tokens":64}}'
+```
+
+**验收**：两条输出不同，且 lora0 输出不乱码。
+
+---
+
+### P1：Kimi 模型加载验证（3 节点，权重到位后）
+
+**目标**：确认 SGLang v0.5.12 能识别 `KimiK25` 架构并正确加载 `compressed-tensors` 量化。
+
+```bash
+# 节点 0（主节点，替换 <node0_ip>，当前已知为 172.21.180.13）
 sglang serve \
-    --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+    --model-path /model/liuxinyang/train/kimi/kimi-prod-8nodes-all/checkpoint-4276-merged \
+    --trust-remote-code \
     --tp-size 24 \
-    --dist-init-addr <node0_ip>:20000 \
-    --nnodes 3 --node-rank 0
+    --dist-init-addr 172.21.180.13:20000 \
+    --nnodes 3 --node-rank 0 \
+    --port 30000
 
 # 节点 1
 sglang serve \
-    --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+    --model-path /model/liuxinyang/train/kimi/kimi-prod-8nodes-all/checkpoint-4276-merged \
+    --trust-remote-code \
     --tp-size 24 \
-    --dist-init-addr <node0_ip>:20000 \
+    --dist-init-addr 172.21.180.13:20000 \
     --nnodes 3 --node-rank 1
 
 # 节点 2
 sglang serve \
-    --model-path meta-llama/Meta-Llama-3.1-405B-Instruct \
+    --model-path /model/liuxinyang/train/kimi/kimi-prod-8nodes-all/checkpoint-4276-merged \
+    --trust-remote-code \
     --tp-size 24 \
-    --dist-init-addr <node0_ip>:20000 \
+    --dist-init-addr 172.21.180.13:20000 \
     --nnodes 3 --node-rank 2
 ```
 
-必须配置的 NCCL 环境变量（Ethernet 集群）：
+启动日志关注点：
+1. 量化识别：日志出现 `compressed-tensors` 或相关内核名
+2. 架构加载：无 `KeyError` / `model_type not found`
+3. 加载完成：出现 `Model loaded` 或 `/health` 返回正常
+
+**验收**：
 
 ```bash
-export NCCL_SOCKET_IFNAME=<网卡名，如 eth0 或 bond0>
-export NCCL_DEBUG=INFO          # 调试阶段打开，确认连接正常后关闭
-export NCCL_IB_DISABLE=1        # 无 InfiniBand 时必须设置
+curl http://172.21.180.13:30000/generate \
+  -d '{"text":"用一句话解释MoE模型","sampling_params":{"max_new_tokens":64}}'
 ```
 
-**验收**：`curl http://<node0_ip>:30000/health` 返回正常，发送一条推理请求能拿到输出。
+---
+
+### P2：Kimi + LoRA 验证（T1 和 P1 都通过后）
+
+**目标**：验证 Kimi 模型的 MoE LoRA 路径，确认 `compressed-tensors` + LoRA 兼容。
+
+```bash
+# 节点 0
+sglang serve \
+    --model-path <kimi_base_model_path> \
+    --trust-remote-code \
+    --tp-size 24 \
+    --dist-init-addr 172.21.180.13:20000 \
+    --nnodes 3 --node-rank 0 \
+    --enable-lora \
+    --lora-paths lora0=<kimi_lora_adapter_path> \
+    --lora-backend triton \
+    --max-lora-rank 32 \
+    --max-loras-per-batch 2 \
+    --disable-shared-experts-fusion \
+    --disable-radix-cache \
+    --mem-fraction-static 0.85
+```
+
+验证：
+
+```bash
+# base
+curl http://172.21.180.13:30000/generate \
+  -d '{"text":"测试","sampling_params":{"max_new_tokens":32}}'
+
+# lora
+curl http://172.21.180.13:30000/generate \
+  -d '{"text":"测试","lora_path":"lora0","sampling_params":{"max_new_tokens":32}}'
+```
+
+**注意**：如果报错，优先看是否是 `compressed-tensors` + LoRA 不兼容。此时备选是退回 merged 权重方案（P1 路径），放弃 separate LoRA。
+
+---
+
+### P3：性能摸底
+
+**目标**：获取基线性能数据，定位瓶颈。
+
+```bash
+python3 -m sglang.bench_serving \
+    --backend sglang \
+    --host 172.21.180.13 --port 30000 \
+    --num-prompts 100 \
+    --input-len 512 --output-len 256 \
+    --request-rate 4
+```
+
+关注：TTFT（prefill 速度）、TPS（decode 吞吐）、GPU 利用率 vs 网络利用率。
+
+**Ethernet 性能预期**：10-25 GB/s 跨节点带宽，TP=24 下网络大概率成瓶颈，TPS 会偏低。
+
+---
+
+### P4：性能优化（按 P3 结果选方向）
+
+**方向 A：Chunked Prefill**（优先尝试）
+
+```bash
+sglang serve ... --chunked-prefill-size 2048
+```
+
+**方向 B：PP=3 × TP=8**（如果跨节点网络是主要瓶颈）
+
+```bash
+sglang serve ... --tp-size 8 --pp-size 3
+# 需先确认 SGLang v0.5.12 是否支持 --pp-size
+python3 -m sglang.launch_server --help | grep pp
+```
+
+**方向 C：多 LoRA 优化**（多 adapter 并发时开启）
+
+```bash
+sglang serve ... --lora-use-virtual-experts
+```
 
 ---
 
@@ -230,25 +371,44 @@ sglang serve \
 
 ---
 
-## 三、需要补充学习的任务
+## 三、SGLang v0.5.12 MoE LoRA 关键参数说明
+
+| 参数 | 作用 | MoE 场景说明 |
+|---|---|---|
+| `--lora-backend triton` | 选 Triton kernel | MoE 必须用 triton，默认 csgmv 不支持 MoE expert 层 |
+| `--max-lora-rank N` | 最大 LoRA rank | 与 adapter 的 r 值一致或更大 |
+| `--disable-shared-experts-fusion` | 关闭 shared expert 融合 | MoE+LoRA 时必须关闭，否则注入出错 |
+| `--disable-radix-cache` | 关闭 radix cache | MoE+LoRA 场景存在兼容问题 |
+| `--max-loras-per-batch N` | 每 batch 最多几个 adapter | 影响显存，多 adapter 时设大 |
+| `--lora-use-virtual-experts` | 虚拟专家优化 | 多 adapter 并发时开启，减少 kernel launch 次数 |
+| `--enable-lora-overlap-loading` | 异步 LoRA 权重加载 | 频繁换 adapter 时开启，降低 H2D 延迟 |
+
+## 四、需要补充学习的任务
 
 | 优先级 | 任务 | 用途 | 入口 |
 |---|---|---|---|
-| P0 必须 | SGLang 多节点启动参数 + NCCL Ethernet 配置 | 节点联通 | SGLang [multi-node 文档](https://sgl-project.github.io/references/multi_node_deployment/multi_node.html) |
-| P1 必须 | SGLang `compressed-tensors` 量化内核路径，L20（SM89）兼容性 | 确认模型能加载 | `sglang/srt/layers/quantization/compressed_tensor.py` |
-| P1 必须 | SGLang `--trust-remote-code` 自定义模型加载机制 | 处理 `KimiK25` 架构 | SGLang 源码模型注册表 |
-| P3-P4 | SGLang chunked prefill 原理与参数调优 | 提升吞吐 | SGLang server arguments 文档 |
-| P4 按需 | SGLang Pipeline Parallel 当前支持状态 | Ethernet 环境下降低跨节点通信开销 | SGLang GitHub issues / changelog |
-| P5 按需 | compressed-tensors + LoRA 内核兼容性 | separate LoRA 部署 | SGLang issue #9449 + PR #21858 |
+| T1 必须 | 运行 T1 测试（DeepSeek-V2-Lite + LoRA）| 验证 MoE LoRA 路径可用 | 本文 T1 节 |
+| P1 必须 | SGLang `compressed-tensors` 量化内核路径，L20（SM89）兼容性 | 确认 Kimi 模型能加载 | `sglang/srt/layers/quantization/compressed_tensor.py` |
+| P2 必须 | `compressed-tensors` + LoRA 是否走同一 hook | separate LoRA 方案的可行性 | `grep -r "lora" sglang/srt/layers/quantization/compressed_tensor*.py` |
+| P3-P4 | SGLang chunked prefill 参数调优 | 提升吞吐 | SGLang server arguments 文档 |
+| P4 按需 | SGLang v0.5.12 PP 支持状态 | Ethernet 环境跨节点通信优化 | `python3 -m sglang.launch_server --help \| grep pp` |
 
 ---
 
-## 四、已知风险汇总
+## 五、已知风险汇总（更新于 2026-05-19）
 
 | 风险 | 等级 | 描述 |
 |---|---|---|
-| 自定义架构不被 SGLang 识别 | 高 | `KimiK25ForConditionalGeneration` 非 SGLang 原生支持，`--trust-remote-code` 不一定够 |
-| Ethernet 跨节点 all-reduce 成瓶颈 | 高 | TP=24 每层都有跨节点通信，Ethernet 带宽可能使 TPS 很低 |
-| compressed-tensors + LoRA 不兼容 | 中 | separate LoRA 路线的技术依据不足，可能需要等上游或自行适配 |
-| PP 支持不成熟 | 中 | P4 优化的备选方案依赖 SGLang PP 支持，需要单独确认 |
-| L20 特定量化内核缺失 | 低 | Marlin 等内核在 SM89 上通常支持，compressed-tensors 需要验证 |
+| Ethernet 跨节点 all-reduce 成瓶颈 | 高 | TP=24，实测带宽 10-25 GB/s，TPS 会受限 |
+| compressed-tensors + LoRA 不兼容 | 中 | separate LoRA 路线需要 T1→P1→P2 逐步验证；如不兼容退回 merged 方案 |
+| 自定义架构加载问题 | **低**（已降级）| SGLang v0.5.11 明确支持 Kimi-K2，`--trust-remote-code` 应足够 |
+| PP 支持不成熟 | 中 | P4 优化依赖 PP，需先确认 v0.5.12 支持状态 |
+| L20 特定量化内核缺失 | 低 | compressed-tensors 在 SM89 兼容性待 P1 验证 |
+
+## 六、版本依据
+
+| SGLang 版本 | 发布时间 | 关键内容 |
+|---|---|---|
+| v0.5.10 | 2026-04-06 | MoE LoRA 基础支持（Triton kernel、TP、CUDA graph）|
+| v0.5.11 | 2026-05 | **DeepSeek-V3 和 Kimi-K2 LoRA 支持**（明确点名）|
+| **v0.5.12** | 2026-05 | Virtual Experts for LoRA MoE（`--lora-use-virtual-experts`）|

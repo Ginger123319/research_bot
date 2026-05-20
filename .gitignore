@@ -1,8 +1,6 @@
 # 大型数据目录（不纳入版本控制）
 logs
 
-# 调研结果文档：只同步到 GitHub（via github-results orphan branch），不进 GitLab
-docs/results/
 
 # Node.js
 node_modules/

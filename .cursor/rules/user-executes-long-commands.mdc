@@ -1,0 +1,32 @@
+---
+description: 长时命令（docker push/pull、大文件下载等）由用户自己执行，AI 只给命令
+alwaysApply: true
+---
+
+# 长时命令由用户自己执行
+
+对于耗时较长、用户需要实时观察进度的命令，**不要通过工具代替用户执行**，而是将完整命令输出给用户，让用户在自己的 terminal 里运行。
+
+## 触发场景
+
+- `docker push` / `docker pull`（镜像较大，推拉进度需要实时可见）
+- `wget` / `curl` 下载大文件
+- 模型权重下载（`hfd.sh`、`huggingface-cli download` 等）
+- 任何预计耗时超过 1 分钟、且进度对用户有意义的命令
+
+## 正确做法
+
+给出完整可执行命令，说明关键参数含义，让用户自己跑：
+
+```bash
+# 打 tag
+docker tag reg-proxy.cece.com/vllm/vllm-openai:v0.19.0-x86_64-ubuntu2404 \
+  reg.xxwolo.com/master/vllm:v0.19.0-x86_64-ubuntu2404
+
+# 推送（在你自己的 terminal 执行，可实时看到每层进度）
+docker push reg.xxwolo.com/master/vllm:v0.19.0-x86_64-ubuntu2404
+```
+
+## 错误做法
+
+直接调用 Shell 工具执行 `docker push`，然后用户只能通过 AI 来查询进度，体验差。

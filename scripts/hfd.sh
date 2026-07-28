@@ -185,9 +185,12 @@ echo "过滤后待下载: $FILTERED_COUNT 个文件"
 # ─── 生成下载任务 ─────────────────────────────────────────────────────────────
 > "$URLS_FILE"
 
+REPO_URL_PREFIX="${HF_ENDPOINT}/${REPO_ID}"
+[[ "$REPO_TYPE" == "dataset" ]] && REPO_URL_PREFIX="${HF_ENDPOINT}/datasets/${REPO_ID}"
+
 while IFS= read -r rfilename; do
     [[ -z "$rfilename" ]] && continue
-    url="${HF_ENDPOINT}/${REPO_ID}/resolve/${REVISION}/${rfilename}"
+    url="${REPO_URL_PREFIX}/resolve/${REVISION}/${rfilename}"
     subdir="$LOCAL_DIR/$(dirname "$rfilename")"
     filename="$(basename "$rfilename")"
 
@@ -226,7 +229,7 @@ else
     # wget 模式：逐文件下载以保留目录结构
     while IFS= read -r rfilename; do
         [[ -z "$rfilename" ]] && continue
-        url="${HF_ENDPOINT}/${REPO_ID}/resolve/${REVISION}/${rfilename}"
+        url="${REPO_URL_PREFIX}/resolve/${REVISION}/${rfilename}"
         target_dir="$LOCAL_DIR/$(dirname "$rfilename")"
         mkdir -p "$target_dir"
         wget_args=(-c -q --show-progress -P "$target_dir")

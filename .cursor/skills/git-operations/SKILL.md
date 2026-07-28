@@ -31,6 +31,56 @@ git config user.email "jiangyunfei@cylingo.com"
 
 ---
 
+## ⚠️ 推送前确认目标远程（每次 push 必做）
+
+本仓库配置了 **两个远程**，触发关键词 "推送 / push / 上传 / 同步" 时，**先确认用户要推到哪个远程，不要默认只推 origin**。
+
+| 远程 | URL | 用途 |
+|------|-----|------|
+| `origin` | `git@git.xxwolo.com:ai-infra-any/research_bot.git` | 内部 GitLab，团队协作主仓库 |
+| `github` | `git@github.com:Ginger123319/research_bot.git` | GitHub 外部备份/公开（用户 `Ginger123319`） |
+
+### 推送前必问 3 件事
+
+1. **推到哪个远程**：仅 `origin`、仅 `github`、还是两个都推？
+2. **推哪些分支**：当前分支、`main`、`--all`？
+3. **是否需要先 rebase** `origin/main` 保持线性历史？
+
+### 常用推送命令
+
+```bash
+# 日常：推到 GitLab
+git push origin dev_jyf
+
+# 同步到 GitHub（备份/公开场景）
+git push github dev_jyf
+git push github --all              # 一次性推所有本地分支
+
+# 两边都推
+git push origin dev_jyf && git push github dev_jyf
+```
+
+### GitHub 必须用 SSH，不要用 HTTPS
+
+**本环境下 HTTPS 推 GitHub 必失败**（实测报错 `fatal: unable to access ...: GnuTLS recv error (-110): The TLS connection was non-properly terminated.`）。
+
+```bash
+# ❌ 错误：HTTPS URL 推送会因 TLS 错误失败
+git remote add github https://github.com/Ginger123319/research_bot.git
+
+# ✅ 正确：使用 SSH URL
+git remote add github git@github.com:Ginger123319/research_bot.git
+
+# 已配置成 HTTPS 时的修复
+git remote set-url github git@github.com:Ginger123319/research_bot.git
+
+# 验证 SSH 连通性（首次需 accept-new 已知主机）
+ssh -T git@github.com
+# 预期输出：Hi Ginger123319! You've successfully authenticated, but GitHub does not provide shell access.
+```
+
+---
+
 ## Quick Reference
 
 ### 身份配置（user.name / user.email）
@@ -92,6 +142,58 @@ main:    A - B - C - D
 
 ---
 
+### 校验两个分支是否对齐
+
+```bash
+# 方式一：看互相差了哪些提交（两个都为空 = 完全对齐）
+git log origin/main..HEAD --oneline   # dev_jyf 独有的提交
+git log HEAD..origin/main --oneline   # main 独有的提交
+
+# 方式二：直接比较 commit hash（相同 = 完全对齐）
+git rev-parse HEAD
+git rev-parse origin/main
+
+# 方式三：图形化查看分支关系
+git log --oneline --graph --all -10
+```
+
+---
+
+### rebase vs merge 把 main 合并到 dev_jyf
+
+两种方式都能把 main 的内容同步到 dev_jyf，但历史形状不同：
+
+```
+# Rebase（推荐）：一条直线，你的提交接在 main 最新提交后面
+main:    A - B - C - D
+dev_jyf:             D - X' - Y'
+
+# Merge（不推荐用于个人分支）：有分叉 + 多余 merge commit
+main:    A - B - C - D
+                      \
+dev_jyf:  A - B - X - Y - M
+```
+
+**`git rebase origin/main` = 把 main 的新代码拉到 dev_jyf，保持历史一条直线。**
+
+**分叉的影响：**
+- `git log` 时间混排，难以理解提交顺序
+- 多人多分支反复 merge 后变成「意大利面条图」
+- 产生无意义的 `Merge branch 'main' into dev_jyf` 提交
+- `git bisect` / `git blame` 查找 bug 效率降低
+
+**什么时候分叉是正常的：**
+功能完成后合入 main 时用 merge，留下合并节点记录「这个功能在何时合并进来」：
+```
+main:  A - B - C - D - M   ← M 明确记录了 dev_jyf 合并时间点
+                      /
+dev_jyf:    X' - Y'
+```
+
+**核心原则：个人开发分支同步 main 用 rebase（保持直线），功能完成合入 main 用 merge（留下合并节点）。**
+
+---
+
 ### 跨分支同步文件
 
 ```bash
@@ -144,3 +246,5 @@ git config --global rerere.enabled true
 | 未配置 user.email 就提交 | GitLab 无法关联账号，先 `git config user.email` |
 | 误以为切换分支会丢失 config | config 绑定仓库/全局，与分支无关 |
 | rebase 冲突解完忘记 `--continue` | `git add` 后必须执行 `git rebase --continue` |
+| 推送时默认只推 `origin` | 本仓库有 `origin`(GitLab) 和 `github`(GitHub) 两个远程，先问用户推哪个 |
+| 用 HTTPS URL 配置 `github` 远程 | 本环境下必报 GnuTLS 错误，必须用 SSH URL `git@github.com:...` |

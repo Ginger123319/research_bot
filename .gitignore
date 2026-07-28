@@ -1,6 +1,7 @@
 # 大型数据目录（不纳入版本控制）
 logs
 
+
 # Node.js
 node_modules/
 
@@ -16,9 +17,6 @@ __pycache__/
 dist/
 build/
 .eggs/
-
-# 分析结果目录（软链指向共享 NFS，不纳入版本控制）
-results
 
 # 生成的 HTML 交互式报告（体积较大，由分析脚本生成）
 # results/**/*.html
